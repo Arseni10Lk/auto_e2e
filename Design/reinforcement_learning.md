@@ -114,7 +114,7 @@ For initial Stage-3 closed-loop bring-up, the policy is evaluated against the re
 Therefore, the **Phase 1 active reward** is formulated as:
 
 ```python
-R = w_gt_dev * R_track + R_bound + w_safe * R_offroad
+R = w_gt_dev * R_track + R_bound + w_offroad * R_offroad
 ```
 
 - **Trajectory Tracking Penalty ($R_{\text{track}}$):** Continuous penalty on displacement error across the predicted horizon:

@@ -1,5 +1,4 @@
-import inspect
-from typing import Dict, Any
+from typing import Any
 import numpy as np
 
 from shapely.geometry import Point, Polygon
@@ -53,8 +52,8 @@ class GroundTruthDeviationReward:
         return tracking_penalty + bound_penalty
 
 
-class SafetyReward:
-    """Handcrafted penalty for off-road driving violations (R_safety)."""
+class OffRoadReward:
+    """Handcrafted penalty for off-road driving violations (R_offroad)."""
 
     def __init__(self) -> None:
         self._cached_map_version = None
@@ -114,50 +113,38 @@ class SafetyReward:
         return 0.0
 
 
-class RewardRegistry:
-    """Manages active reward functions and their scaling weights."""
+class RewardManager:
+    """Computes total reward for the AutoE2E RL loop."""
 
-    def __init__(self, config_weights: Dict[str, float]) -> None:
-        """Initialize the registry with specific weights.
+    def __init__(
+        self,
+        w_gt_dev: float = 1.0,
+        w_offroad: float = 0.5,
+        gt_reward: GroundTruthDeviationReward | None = None,
+        offroad_reward: OffRoadReward | None = None,
+    ) -> None:
+        self.w_gt_dev = w_gt_dev
+        self.w_offroad = w_offroad
+        self.gt_reward = gt_reward or GroundTruthDeviationReward()
+        self.offroad_reward = offroad_reward or OffRoadReward()
 
-        Args:
-            config_weights: A dictionary mapping reward names to their weights.
-                e.g., {'w_gt_dev': 1.0, 'w_safe': 0.5}
-        """
-        self.weights = config_weights
-        self.rewards: Dict[str, Any] = {}
+        if (self.gt_reward is None and self.offroad_reward is None):
+            raise ValueError("At least one reward should be passed")
 
-        if "w_gt_dev" in self.weights:
-            self.rewards["w_gt_dev"] = GroundTruthDeviationReward()
-
-        if "w_safe" in self.weights:
-            self.rewards["w_safe"] = SafetyReward()
-
-    def compute_total_reward(self, **kwargs: Any) -> tuple[float, Dict[str, float]]:
-        """Compute the weighted sum of all registered rewards.
-
-        Filters simulation kwargs to only those explicitly declared by each reward's compute method.
-
-        Returns:
-            A tuple containing:
-                - The total scalar reward.
-                - A dictionary of the unweighted individual components.
-        """
-        components: Dict[str, float] = {}
-        total_reward = 0.0
-
-        for name, reward_func in self.rewards.items():
-            sig = inspect.signature(reward_func.compute)
-            filtered = {k: v for k, v in kwargs.items() if k in sig.parameters}
-            val = reward_func.compute(**filtered)
-            components[name] = val
-            total_reward += self.weights[name] * val
-
-        return total_reward, components
+    def compute(
+        self,
+        trajectory_xy: np.ndarray,
+        gt_trajectory: np.ndarray,
+        ego_pose: tuple[float, float, float],
+        navigation_map: Any,
+    ) -> float:
+        r_gt = self.gt_reward.compute(trajectory_xy, gt_trajectory)
+        r_offroad = self.offroad_reward.compute(ego_pose, trajectory_xy, navigation_map)
+        return self.w_gt_dev * r_gt + self.w_offroad * r_offroad
 
 
 __all__ = [
     "GroundTruthDeviationReward",
-    "SafetyReward",
-    "RewardRegistry",
+    "OffRoadReward",
+    "RewardManager",
 ]

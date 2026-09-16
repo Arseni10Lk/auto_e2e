@@ -14,7 +14,7 @@ driver:
     device: "cuda"
     rewards:
       w_gt_dev: 1.0
-      w_safe: 0.5
+      w_offroad: 0.5
 
   host: "0.0.0.0"
   port: ???

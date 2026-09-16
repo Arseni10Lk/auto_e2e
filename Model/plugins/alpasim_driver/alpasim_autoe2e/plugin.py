@@ -94,9 +94,9 @@ class AutoE2EDriver(BaseTrajectoryModel):
             camera_ids = config.camera_names
         self._camera_ids = camera_ids
         
-        # Initialize RL Reward Registry
-        from .rewards import RewardRegistry
-        self.reward_registry = RewardRegistry(rewards or {})
+        # Initialize RL Reward Manager
+        from .rewards import RewardManager
+        self.reward_manager = RewardManager(**(rewards or {}))
         
         self.parser = AlpasimStreamParser(
             camera_names=self._camera_ids,
