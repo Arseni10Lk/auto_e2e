@@ -6,21 +6,13 @@ import time
 import numpy as np
 from PIL import Image
 import torch
-from torchvision import transforms
 
 from data_parsing.kit_scenes.map import generate_bev_map_tile
 from data_parsing.kit_scenes.navigation import build_scene_navigation
 from model_components.view_fusion import PinholeProjection
 from navigation.rasterizer import EgoPose, NativeNavigationRasterizer
 
-from .config import load_projection_matrices
-
-_TRANSFORM = transforms.Compose(
-    [
-        transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-    ]
-)
+from .config import get_image_transform, load_projection_matrices
 
 _HISTORY_STEPS = 64
 _HISTORY_SIGNALS = 4
@@ -34,15 +26,15 @@ class AlpasimStreamParser:
         self,
         camera_names: list[str],
         scene_id: str | None = None,
-        calibration_path: str | Path | None = None,
     ) -> None:
         self.camera_names = camera_names
+        self.transform = get_image_transform()
         self._egomotion_buffer = np.zeros(
             (_HISTORY_STEPS, _HISTORY_SIGNALS), dtype=np.float32
         )
         self.visual_history = torch.zeros(1, _VISUAL_HISTORY_DIM, dtype=torch.float32)
 
-        calib_matrices = load_projection_matrices(calibration_path)
+        calib_matrices = load_projection_matrices()
         matrices = [calib_matrices[name] for name in self.camera_names]
         self.camera_params = torch.tensor(matrices, dtype=torch.float32).unsqueeze(0)
         self.projection = PinholeProjection(self.camera_params)
@@ -89,7 +81,7 @@ class AlpasimStreamParser:
         img = Image.fromarray(np.asarray(image))
         if img.size != (256, 256):
             img = img.resize((256, 256), resample=Image.Resampling.BILINEAR)
-        return _TRANSFORM(img)
+        return self.transform(img)
 
     def parse_observation(self, observation: Dict[str, Any]) -> Dict[str, Any]:
         """Convert a live observation dictionary into pipeline batch tensors.
