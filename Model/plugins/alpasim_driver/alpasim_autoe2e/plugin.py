@@ -134,10 +134,10 @@ class AutoE2EDriver(BaseTrajectoryModel):
         Returns:
             ModelPrediction with trajectory_xy [64, 2] and headings [64].
         """
-        cameras_dict = {
-            cam_name: frames[-1].image
-            for cam_name, frames in input_data.camera_images.items()
-        }
+        cameras_dict = {}
+        for cam_name, val in input_data.camera_images.items():
+            frame = val[-1] if isinstance(val, (list, tuple)) else val
+            cameras_dict[cam_name] = getattr(frame, "image", frame)
 
         speed = input_data.speed
         acceleration = input_data.acceleration
@@ -178,9 +178,9 @@ class AutoE2EDriver(BaseTrajectoryModel):
 
         if self.model is not None:
             with torch.no_grad():
-                outputs = self.model(**tensors, mode="inference")
+                controls = self.model(**tensors, mode="inference")
                 points, headings = _unroll_unicycle_controls(
-                    outputs[0].cpu().numpy().reshape(64, 2), speed
+                    controls[0].cpu().numpy().reshape(64, 2), speed
                 )
         else:
             if not self.allow_mock:

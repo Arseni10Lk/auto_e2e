@@ -33,10 +33,8 @@ if str(_ALPASIM_DRIVER_DIR) not in sys.path:
 
 from alpasim_autoe2e.rewards import (  # noqa: E402
     GroundTruthDeviationReward,
-    GTDeviationReward,
     OffRoadReward,
-    RewardRegistry,
-    SafetyReward,
+    RewardManager,
 )
 
 
@@ -132,7 +130,7 @@ class TestSafetyRewardOffRoad:
     ):
         """When all waypoints lie inside drivable polygons, off-road penalty is 0.0."""
         traj, _ = straight_trajectory_10_steps
-        reward_fn = SafetyReward()
+        reward_fn = OffRoadReward()
 
         reward = reward_fn.compute(
             ego_pose=(0.0, 0.0, 0.0),
@@ -156,7 +154,7 @@ class TestSafetyRewardOffRoad:
             ],
             dim=-1,
         )
-        reward_fn = SafetyReward()
+        reward_fn = OffRoadReward()
 
         reward = reward_fn.compute(
             ego_pose=(0.0, 0.0, 0.0),
@@ -180,7 +178,7 @@ class TestSafetyRewardOffRoad:
         )
         traj = torch.stack([x_pts, y_pts], dim=-1)
 
-        reward_fn = SafetyReward()
+        reward_fn = OffRoadReward()
         reward = reward_fn.compute(
             ego_pose=(0.0, 0.0, 0.0),
             trajectory_xy=traj,
@@ -208,7 +206,7 @@ class TestSafetyRewardOffRoad:
         # Local trajectory going forward in ego x
         traj_local = torch.stack([torch.arange(1.0, 6.0), torch.zeros(5)], dim=-1)
 
-        reward_fn = SafetyReward()
+        reward_fn = OffRoadReward()
 
         # Case A: Facing North (yaw = pi/2), local forward moves into global y -> inside corridor
         reward_inside = reward_fn.compute(
@@ -245,7 +243,7 @@ class TestSafetyRewardOffRoad:
             dtype=torch.float32,
         )
 
-        reward_fn = SafetyReward()
+        reward_fn = OffRoadReward()
         reward = reward_fn.compute(
             ego_pose=(0.0, 0.0, 0.0),
             trajectory_xy=traj,
@@ -266,7 +264,7 @@ class TestSafetyRewardOffRoad:
         )
         traj = torch.tensor([[0.0, 0.0], [5.0, 0.0]], dtype=torch.float32)
 
-        reward_fn = SafetyReward()
+        reward_fn = OffRoadReward()
         reward = reward_fn.compute(
             ego_pose=(0.0, 0.0, 0.0),
             trajectory_xy=traj,
@@ -288,7 +286,7 @@ class TestSafetyRewardOffRoad:
             drivable_polygons=[invalid_poly, valid_poly],
         )
 
-        reward_fn = SafetyReward()
+        reward_fn = OffRoadReward()
         # Point (0, 0) is strictly inside triangle (-10,-10), (10,-10), (0,10)
         reward = reward_fn.compute(
             ego_pose=(0.0, 0.0, 0.0),
@@ -301,7 +299,7 @@ class TestSafetyRewardOffRoad:
         self, drivable_corridor_map: MockNavigationMap
     ):
         """STRtree is cached across compute calls with the same map_version and rebuilt on version change."""
-        reward_fn = SafetyReward()
+        reward_fn = OffRoadReward()
         traj = torch.tensor([[1.0, 0.0]])
 
         assert reward_fn._drivable_tree is None
@@ -391,12 +389,11 @@ class TestGroundTruthDeviationReward:
         assert reward == pytest.approx(-6.0, abs=1e-6)
 
     def test_3dgs_boundary_threshold_exceeded(self):
-        """When max deviation exceeds 3.0m, applies terminal penalty and flags is_out_of_bounds."""
+        """When max deviation exceeds 3.0m, applies terminal penalty."""
         gt = np.zeros((5, 2), dtype=np.float32)
         pred = np.zeros((5, 2), dtype=np.float32)
         pred[-1, 1] = 3.5  # > 3.0m threshold
 
-        info = {}
         reward_fn = GroundTruthDeviationReward(
             ade_weight=1.0,
             fde_weight=0.0,
@@ -407,13 +404,8 @@ class TestGroundTruthDeviationReward:
         reward = reward_fn.compute(
             trajectory_xy=pred,
             gt_trajectory=gt,
-            info=info,
         )
         assert reward == pytest.approx(-10.7, abs=1e-6)
-        assert info.get("is_out_of_bounds") is True
-        assert info["reward_diagnostics"]["max_deviation"] == pytest.approx(
-            3.5, abs=1e-6
-        )
 
     def test_boundary_not_exceeded_within_threshold(self):
         """When max deviation is within 3.0m threshold, no terminal penalty is applied."""
@@ -421,7 +413,6 @@ class TestGroundTruthDeviationReward:
         pred = np.zeros((5, 2), dtype=np.float32)
         pred[-1, 1] = 2.9  # <= 3.0m
 
-        info = {}
         reward_fn = GroundTruthDeviationReward(
             ade_weight=1.0,
             fde_weight=0.0,
@@ -431,11 +422,9 @@ class TestGroundTruthDeviationReward:
         reward = reward_fn.compute(
             trajectory_xy=pred,
             gt_trajectory=gt,
-            info=info,
         )
         # ADE = 2.9 / 5 = 0.58. No terminal penalty.
         assert reward == pytest.approx(-0.58, abs=1e-6)
-        assert info.get("is_out_of_bounds") is False
 
     def test_torch_tensor_and_numpy_parity(self):
         """Parity between PyTorch Tensors (with grad) and NumPy arrays."""
@@ -447,7 +436,10 @@ class TestGroundTruthDeviationReward:
 
         reward_fn = GroundTruthDeviationReward()
         r_np = reward_fn.compute(trajectory_xy=pred_np, gt_trajectory=gt_np)
-        r_torch = reward_fn.compute(trajectory_xy=pred_torch, gt_trajectory=gt_torch)
+        r_torch = reward_fn.compute(
+            trajectory_xy=pred_torch.detach().numpy(),
+            gt_trajectory=gt_torch.numpy(),
+        )
 
         assert isinstance(r_torch, float)
         assert r_torch == pytest.approx(r_np, abs=1e-6)
@@ -477,22 +469,6 @@ class TestGroundTruthDeviationReward:
         reward = reward_fn.compute(trajectory_xy=pred, gt_trajectory=gt)
         assert reward == pytest.approx(0.0, abs=1e-6)
 
-    def test_info_diagnostics_logging(self):
-        """info dictionary is correctly populated with reward_diagnostics."""
-        gt = np.zeros((4, 2), dtype=np.float32)
-        pred = np.zeros((4, 2), dtype=np.float32)
-        info = {}
-
-        reward_fn = GroundTruthDeviationReward()
-        reward = reward_fn.compute(
-            trajectory_xy=pred,
-            gt_trajectory=gt,
-            info=info,
-        )
-        assert reward == pytest.approx(0.0, abs=1e-6)
-        assert "reward_diagnostics" in info
-        assert info["reward_diagnostics"]["ade"] == pytest.approx(0.0, abs=1e-6)
-
 
 # ---------------------------------------------------------------------------
 # 3. Off-Road Edge Cases & Input Validation
@@ -506,14 +482,14 @@ class TestSafetyRewardCombinedAndEdgeCases:
         self, drivable_corridor_map: MockNavigationMap
     ):
         """Handles torch.Tensor (with requires_grad), numpy.ndarray, and list inputs seamlessly."""
-        reward_fn = SafetyReward()
+        reward_fn = OffRoadReward()
 
-        # 1. PyTorch Tensor with gradient tracking
+        # 1. PyTorch Tensor
         traj_torch = torch.tensor([[1.0, 0.0], [2.0, 0.0]], requires_grad=True)
 
         r1 = reward_fn.compute(
             ego_pose=(0.0, 0.0, 0.0),
-            trajectory_xy=traj_torch,
+            trajectory_xy=traj_torch.detach().numpy(),
             navigation_map=drivable_corridor_map,
         )
         assert isinstance(r1, float)
@@ -540,7 +516,7 @@ class TestSafetyRewardCombinedAndEdgeCases:
         self, drivable_corridor_map: MockNavigationMap
     ):
         """Zero-step trajectory returns 0.0 scalar without division by zero errors."""
-        reward_fn = SafetyReward()
+        reward_fn = OffRoadReward()
         reward = reward_fn.compute(
             ego_pose=(0.0, 0.0, 0.0),
             trajectory_xy=torch.zeros((0, 2)),
@@ -552,7 +528,7 @@ class TestSafetyRewardCombinedAndEdgeCases:
         self, drivable_corridor_map: MockNavigationMap
     ):
         """Missing ego_pose, trajectory_xy, or navigation_map raises TypeError."""
-        reward_fn = SafetyReward()
+        reward_fn = OffRoadReward()
         traj = torch.tensor([[1.0, 0.0]])
 
         with pytest.raises(TypeError):
@@ -576,7 +552,7 @@ class TestSafetyRewardCombinedAndEdgeCases:
     def test_empty_drivable_area_raises_value_error(self):
         """Navigation map with empty drivable polygons raises ValueError."""
         empty_map = MockNavigationMap(map_version="empty", drivable_polygons=[])
-        reward_fn = SafetyReward()
+        reward_fn = OffRoadReward()
 
         with pytest.raises(ValueError, match="No drivable area defined"):
             reward_fn.compute(
@@ -587,70 +563,65 @@ class TestSafetyRewardCombinedAndEdgeCases:
 
 
 # ---------------------------------------------------------------------------
-# 4. RewardRegistry & Auxiliary Rewards
+# 4. RewardManager & Auxiliary Rewards
 # ---------------------------------------------------------------------------
 
 
-class TestRewardRegistryAndFramework:
-    """Tests covering RewardRegistry, weight configurations, and active reward interfaces."""
+class TestRewardManagerAndFramework:
+    """Tests covering RewardManager, weight configurations, and active reward interfaces."""
 
-    def test_reward_registry_initialization_and_computation(
+    def test_reward_manager_initialization_and_computation(
         self,
         drivable_corridor_map: MockNavigationMap,
         straight_trajectory_10_steps: tuple[torch.Tensor, torch.Tensor],
     ):
-        """RewardRegistry initializes active rewards based on config keys and computes weighted total."""
-        traj, headings = straight_trajectory_10_steps
-        weights = {
-            "w_gt_dev": 2.0,
-            "w_safe": 1.0,
-        }
+        """RewardManager initializes active rewards based on weights and computes total reward."""
+        traj, _ = straight_trajectory_10_steps
+        traj_np = traj.cpu().numpy()
 
-        registry = RewardRegistry(config_weights=weights)
+        manager = RewardManager(w_gt_dev=2.0, w_offroad=1.0)
 
-        assert "w_gt_dev" in registry.rewards
-        assert "w_safe" in registry.rewards
-        assert isinstance(registry.rewards["w_gt_dev"], GroundTruthDeviationReward)
-        assert isinstance(registry.rewards["w_safe"], SafetyReward)
+        assert isinstance(manager.gt_reward, GroundTruthDeviationReward)
+        assert isinstance(manager.offroad_reward, OffRoadReward)
 
-        total_reward, components = registry.compute_total_reward(
+        total_reward = manager.compute(
+            trajectory_xy=traj_np,
+            gt_trajectory=traj_np,
             ego_pose=(0.0, 0.0, 0.0),
-            trajectory_xy=traj,
-            gt_trajectory=traj,
-            headings=headings,
             navigation_map=drivable_corridor_map,
-            speed=10.0,
-            acceleration=0.0,
-            yaw_rate=0.0,
         )
 
-        assert "w_gt_dev" in components
-        assert "w_safe" in components
-        assert components["w_gt_dev"] == pytest.approx(0.0, abs=1e-6)
-        assert components["w_safe"] == pytest.approx(0.0, abs=1e-6)
         assert total_reward == pytest.approx(0.0, abs=1e-6)
 
-    def test_reward_registry_alternative_keys_and_aliases(self):
-        """RewardRegistry supports w_gt and w_offroad alias keys."""
-        registry = RewardRegistry(config_weights={"w_gt": 1.5, "w_offroad": 0.5})
-        assert "w_gt" in registry.rewards
-        assert "w_offroad" in registry.rewards
-        assert isinstance(registry.rewards["w_gt"], GTDeviationReward)
-        assert isinstance(registry.rewards["w_offroad"], OffRoadReward)
+    def test_reward_manager_custom_rewards_and_validation(self):
+        """RewardManager accepts custom rewards and custom weights."""
+        gt_rew = GroundTruthDeviationReward(ade_weight=2.0)
+        offroad_rew = OffRoadReward()
+        manager = RewardManager(
+            w_gt_dev=1.5, w_offroad=0.5, gt_reward=gt_rew, offroad_reward=offroad_rew
+        )
+        assert manager.gt_reward is gt_rew
+        assert manager.offroad_reward is offroad_rew
+        assert manager.w_gt_dev == 1.5
+        assert manager.w_offroad == 0.5
 
-    def test_reward_registry_weight_scaling(self):
+    def test_reward_manager_weight_scaling(
+        self,
+        drivable_corridor_map: MockNavigationMap,
+    ):
         """Total reward scales linearly according to configured component weights."""
         traj = np.zeros((4, 2), dtype=np.float32)
         gt = np.ones(
             (4, 2), dtype=np.float32
         )  # error = sqrt(1+1) = sqrt(2) approx 1.4142
 
-        registry = RewardRegistry(config_weights={"w_gt_dev": 3.0})
-        total, comps = registry.compute_total_reward(
-            trajectory_xy=traj, gt_trajectory=gt
+        # w_offroad=0.0 to focus purely on gt deviation scaling
+        manager = RewardManager(w_gt_dev=3.0, w_offroad=0.0)
+        total = manager.compute(
+            trajectory_xy=traj,
+            gt_trajectory=gt,
+            ego_pose=(0.0, 0.0, 0.0),
+            navigation_map=drivable_corridor_map,
         )
-        # ADE = sqrt(2), FDE = sqrt(2). Default ade_weight=1.0, fde_weight=0.5 -> penalty = -1.5 * sqrt(2)
-        # Total = 3.0 * (-1.5 * sqrt(2)) = -4.5 * sqrt(2)
         expected_penalty = -(1.0 * np.sqrt(2) + 0.5 * np.sqrt(2))
-        assert comps["w_gt_dev"] == pytest.approx(expected_penalty, abs=1e-5)
         assert total == pytest.approx(3.0 * expected_penalty, abs=1e-5)

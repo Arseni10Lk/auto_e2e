@@ -25,11 +25,10 @@ from alpasim_autoe2e.config import AutoE2EAlpaSimConfig  # noqa: E402
 from alpasim_autoe2e.plugin import (  # noqa: E402
     AutoE2EDriver,
     ModelPrediction,
-    PredictionInput as PluginPredictionInput,
+    PredictionInput,
 )
 from alpasim_autoe2e.parser import (  # noqa: E402
     AlpasimStreamParser,
-    PredictionInput,
 )
 PARSER_CAMERA_NAMES = AutoE2EAlpaSimConfig(checkpoint_path='dummy.ckpt').camera_names
 
@@ -41,10 +40,7 @@ from data_parsing.pre_extracted import (  # noqa: E402
 
 class MockAutoE2EModel(torch.nn.Module):
     def forward(self, **kwargs):
-        return {
-            "trajectory_points": torch.zeros((1, 64, 2)),
-            "headings": torch.zeros((1, 64))
-        }
+        return torch.zeros((1, 64, 2))
 
 torch.serialization.add_safe_globals([MockAutoE2EModel])
 
@@ -501,7 +497,7 @@ class TestAlpasimDriverPlugin:
         """
         driver = AutoE2EDriver(model_checkpoint=dummy_checkpoint, allow_mock=True)
         mock_parser_deps(driver.parser)
-        pred_input = PluginPredictionInput(
+        pred_input = PredictionInput(
             camera_images=sample_rgb_images,
             speed=8.0,
             acceleration=0.1,
@@ -520,15 +516,13 @@ class TestAlpasimDriverPlugin:
         assert isinstance(result.headings, np.ndarray)
         assert result.trajectory_xy.shape == (64, 2)
         assert result.headings.shape == (64,)
-        assert traj.dtype == np.float32
+        assert result.trajectory_xy.dtype == np.float32
         assert result.headings.dtype == np.float32
 
     def test_driver_plugin_strict_mock_disallowed(self) -> None:
         """Verify that initializing with allow_mock=False fails fast when using mock dependencies."""
-        from alpasim_autoe2e.plugin import IS_MOCK_MODE
-        if IS_MOCK_MODE:
-            with pytest.raises(ImportError, match="allow_mock=True"):
-                AutoE2EDriver(model_checkpoint="nonexistent.ckpt", allow_mock=False)
+        with pytest.raises(FileNotFoundError, match="not found"):
+            AutoE2EDriver(model_checkpoint="nonexistent.ckpt", allow_mock=False)
 
     def test_dynamic_camera_list(self) -> None:
         """Verify the parser and driver work correctly with an arbitrary list of camera names."""
@@ -563,7 +557,7 @@ class TestAlpasimDriverPlugin:
                 type("MockPoseAtTime", (), {"timestamp_us": 0, "pose": type("MockPose", (), {"quat": type("MockQuat", (), {"w":1.0, "x":0.0, "y":0.0, "z":0.0})(), "x":0.0, "y":0.0, "z":0.0})()})(),
                 type("MockPoseAtTime", (), {"timestamp_us": 1, "pose": type("MockPose", (), {"quat": type("MockQuat", (), {"w":1.0, "x":0.0, "y":0.0, "z":0.0})(), "x":0.0, "y":0.0, "z":0.0})()})(),
         ]
-        pred = driver.predict(PluginPredictionInput(camera_images=fake_images, speed=5.0, acceleration=1.0, command=1, ego_pose_history=fake_history, inference_seed=0))
+        pred = driver.predict(PredictionInput(camera_images=fake_images, speed=5.0, acceleration=1.0, command=1, ego_pose_history=fake_history, inference_seed=0))
         assert pred.trajectory_xy.shape == (64, 2)
 
     def test_dynamic_yaw_rate_and_curvature(self, dummy_checkpoint: str, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -612,7 +606,7 @@ class TestAlpasimDriverPlugin:
         
         monkeypatch.setattr(driver.parser, "parse_observation", mock_parse_observation)
 
-        pred_input = PluginPredictionInput(
+        pred_input = PredictionInput(
             camera_images={},
             speed=10.0,
             acceleration=0.0,
@@ -811,7 +805,7 @@ class TestDynamicBevMapGeneration:
             lambda **kwargs: synthetic_tile,
         )
 
-        pred_input = PluginPredictionInput(
+        pred_input = PredictionInput(
             camera_images=sample_rgb_images,
             speed=8.0,
             acceleration=0.1,

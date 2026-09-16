@@ -1,16 +1,18 @@
-from typing import Any, Dict
+import io
 import os
 from pathlib import Path
 import time
+from typing import Any, Dict
 
 import numpy as np
 from PIL import Image
 import torch
 
-from data_parsing.kit_scenes.map import generate_bev_map_tile
-from data_parsing.kit_scenes.navigation import build_scene_navigation
+import data_parsing.kit_scenes.map as kit_map
+import data_parsing.kit_scenes.navigation as kit_nav
 from model_components.view_fusion import PinholeProjection
-from navigation.rasterizer import EgoPose, NativeNavigationRasterizer
+from navigation.rasterizer import EgoPose
+import navigation.rasterizer as nav_rasterizer
 
 from .config import get_image_transform, load_projection_matrices
 
@@ -63,8 +65,8 @@ class AlpasimStreamParser:
                             2.0 * (qw * qz + qx * qy), 1.0 - 2.0 * (qy * qy + qz * qz)
                         )
 
-                        self.rasterizer = NativeNavigationRasterizer()
-                        nav = build_scene_navigation(
+                        self.rasterizer = nav_rasterizer.NativeNavigationRasterizer()
+                        nav = kit_nav.build_scene_navigation(
                             scene_id=scene_id,
                             scene_path=scene_path,
                             positions_enu_m=positions_enu_m,
@@ -76,9 +78,14 @@ class AlpasimStreamParser:
                         self.navigation_map = nav.navigation_map
                         self.route = nav.route
 
-    def _decode_image(self, image: np.ndarray) -> torch.Tensor:
-        """Normalize camera frame array into a [3, 256, 256] tensor."""
-        img = Image.fromarray(np.asarray(image))
+    def _decode_image(self, image: bytes | np.ndarray | Image.Image) -> torch.Tensor:
+        """Normalize camera frame array, bytes, or PIL Image into a [3, 256, 256] tensor."""
+        if isinstance(image, bytes):
+            img = Image.open(io.BytesIO(image)).convert("RGB")
+        elif isinstance(image, np.ndarray):
+            img = Image.fromarray(image)
+        else:
+            img = image.convert("RGB")
         if img.size != (256, 256):
             img = img.resize((256, 256), resample=Image.Resampling.BILINEAR)
         return self.transform(img)
@@ -130,7 +137,7 @@ class AlpasimStreamParser:
             raster = self.rasterizer.render(self.navigation_map, self.route, live_pose)
             route_mask = torch.from_numpy(raster.route_mask).float().unsqueeze(0)
             if self.navigation_map and self.scene_path:
-                bev_map = generate_bev_map_tile(
+                bev_map = kit_map.generate_bev_map_tile(
                     scene_path=self.scene_path,
                     ego_x=x,
                     ego_y=y,
