@@ -22,7 +22,6 @@ import dataclasses
 import sys
 from pathlib import Path
 from typing import List
-from unittest.mock import patch
 
 import numpy as np
 import pytest
@@ -33,10 +32,9 @@ if str(_ALPASIM_DRIVER_DIR) not in sys.path:
     sys.path.insert(0, str(_ALPASIM_DRIVER_DIR))
 
 from alpasim_autoe2e.rewards import (  # noqa: E402
-    ComfortReward,
-    ImitationAnchor,
-    ProgressReward,
-    ReasoningReward,
+    GroundTruthDeviationReward,
+    GTDeviationReward,
+    OffRoadReward,
     RewardRegistry,
     SafetyReward,
 )
@@ -109,7 +107,10 @@ def multi_polygon_map() -> MockNavigationMap:
 def straight_trajectory_10_steps() -> tuple[torch.Tensor, torch.Tensor]:
     """10-step straight trajectory along local x-axis from x=1 to x=10 with heading 0."""
     traj = torch.stack(
-        [torch.arange(1.0, 11.0, dtype=torch.float32), torch.zeros(10, dtype=torch.float32)],
+        [
+            torch.arange(1.0, 11.0, dtype=torch.float32),
+            torch.zeros(10, dtype=torch.float32),
+        ],
         dim=-1,
     )
     headings = torch.zeros(10, dtype=torch.float32)
@@ -125,18 +126,18 @@ class TestSafetyRewardOffRoad:
     """Tests covering off-road detection and polygon intersection logic."""
 
     def test_trajectory_fully_inside_drivable_area(
-        self, drivable_corridor_map: MockNavigationMap, straight_trajectory_10_steps: tuple[torch.Tensor, torch.Tensor]
+        self,
+        drivable_corridor_map: MockNavigationMap,
+        straight_trajectory_10_steps: tuple[torch.Tensor, torch.Tensor],
     ):
         """When all waypoints lie inside drivable polygons, off-road penalty is 0.0."""
-        traj, headings = straight_trajectory_10_steps
+        traj, _ = straight_trajectory_10_steps
         reward_fn = SafetyReward()
 
         reward = reward_fn.compute(
             ego_pose=(0.0, 0.0, 0.0),
             trajectory_xy=traj,
-            headings=headings,
             navigation_map=drivable_corridor_map,
-            info={"dynamic_agents": []},
         )
 
         assert reward == pytest.approx(0.0, abs=1e-6)
@@ -149,18 +150,18 @@ class TestSafetyRewardOffRoad:
         """
         # 10 steps along y=20.0 (corridor only extends to y=5.0)
         traj = torch.stack(
-            [torch.arange(1.0, 11.0, dtype=torch.float32), torch.full((10,), 20.0, dtype=torch.float32)],
+            [
+                torch.arange(1.0, 11.0, dtype=torch.float32),
+                torch.full((10,), 20.0, dtype=torch.float32),
+            ],
             dim=-1,
         )
-        headings = torch.zeros(10, dtype=torch.float32)
         reward_fn = SafetyReward()
 
         reward = reward_fn.compute(
             ego_pose=(0.0, 0.0, 0.0),
             trajectory_xy=traj,
-            headings=headings,
             navigation_map=drivable_corridor_map,
-            info={"dynamic_agents": []},
         )
 
         # 10 steps * (-1.0) / 10 steps = -1.0
@@ -174,17 +175,16 @@ class TestSafetyRewardOffRoad:
         """
         # First 6 points inside corridor (y=0.0), last 4 points off-road (y=15.0)
         x_pts = torch.arange(1.0, 11.0, dtype=torch.float32)
-        y_pts = torch.tensor([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 15.0, 15.0, 15.0, 15.0], dtype=torch.float32)
+        y_pts = torch.tensor(
+            [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 15.0, 15.0, 15.0, 15.0], dtype=torch.float32
+        )
         traj = torch.stack([x_pts, y_pts], dim=-1)
-        headings = torch.zeros(10, dtype=torch.float32)
 
         reward_fn = SafetyReward()
         reward = reward_fn.compute(
             ego_pose=(0.0, 0.0, 0.0),
             trajectory_xy=traj,
-            headings=headings,
             navigation_map=drivable_corridor_map,
-            info={"dynamic_agents": []},
         )
 
         assert reward == pytest.approx(-0.4, abs=1e-6)
@@ -197,7 +197,9 @@ class TestSafetyRewardOffRoad:
         transforms to global y: [1, 2, 3, 4, 5], global x: [0, 0, 0, 0, 0].
         """
         # Vertical drivable corridor along global y-axis: x in [-2, 2], y in [-10, 10]
-        corridor_pts = np.array([[-2.0, -10.0], [2.0, -10.0], [2.0, 10.0], [-2.0, 10.0]], dtype=np.float64)
+        corridor_pts = np.array(
+            [[-2.0, -10.0], [2.0, -10.0], [2.0, 10.0], [-2.0, 10.0]], dtype=np.float64
+        )
         nav_map = MockNavigationMap(
             map_version="v1.0",
             drivable_polygons=[MockPolygonPrimitive("north_lane", corridor_pts)],
@@ -205,7 +207,6 @@ class TestSafetyRewardOffRoad:
 
         # Local trajectory going forward in ego x
         traj_local = torch.stack([torch.arange(1.0, 6.0), torch.zeros(5)], dim=-1)
-        headings_local = torch.zeros(5)
 
         reward_fn = SafetyReward()
 
@@ -213,7 +214,6 @@ class TestSafetyRewardOffRoad:
         reward_inside = reward_fn.compute(
             ego_pose=(0.0, 0.0, np.pi / 2),
             trajectory_xy=traj_local,
-            headings=headings_local,
             navigation_map=nav_map,
         )
         assert reward_inside == pytest.approx(0.0, abs=1e-6)
@@ -223,12 +223,13 @@ class TestSafetyRewardOffRoad:
         reward_outside = reward_fn.compute(
             ego_pose=(0.0, 0.0, 0.0),
             trajectory_xy=traj_local,
-            headings=headings_local,
             navigation_map=nav_map,
         )
         assert reward_outside < 0.0
 
-    def test_multiple_drivable_polygons_and_gap(self, multi_polygon_map: MockNavigationMap):
+    def test_multiple_drivable_polygons_and_gap(
+        self, multi_polygon_map: MockNavigationMap
+    ):
         """Trajectory traversing from polygon A, across an off-road gap, into polygon B.
 
         Poly A: x in [-50, -5]
@@ -239,14 +240,15 @@ class TestSafetyRewardOffRoad:
         # -10 and -7 are in Poly A
         # 0 is in the gap (off-road -> penalty -1.0)
         # 7 and 10 are in Poly B
-        traj = torch.tensor([[-10.0, 0.0], [-7.0, 0.0], [0.0, 0.0], [7.0, 0.0], [10.0, 0.0]], dtype=torch.float32)
-        headings = torch.zeros(5, dtype=torch.float32)
+        traj = torch.tensor(
+            [[-10.0, 0.0], [-7.0, 0.0], [0.0, 0.0], [7.0, 0.0], [10.0, 0.0]],
+            dtype=torch.float32,
+        )
 
         reward_fn = SafetyReward()
         reward = reward_fn.compute(
             ego_pose=(0.0, 0.0, 0.0),
             trajectory_xy=traj,
-            headings=headings,
             navigation_map=multi_polygon_map,
         )
 
@@ -255,26 +257,28 @@ class TestSafetyRewardOffRoad:
 
     def test_2d_and_3d_polygon_coordinates(self):
         """Navigation maps with 2D [N, 2] or 3D [N, 3] points_enu_m are handled correctly."""
-        pts_3d = np.array([[-20.0, -5.0, 1.5], [20.0, -5.0, 1.5], [20.0, 5.0, 2.0], [-20.0, 5.0, 2.0]])
+        pts_3d = np.array(
+            [[-20.0, -5.0, 1.5], [20.0, -5.0, 1.5], [20.0, 5.0, 2.0], [-20.0, 5.0, 2.0]]
+        )
         nav_map = MockNavigationMap(
             map_version="v3d",
             drivable_polygons=[MockPolygonPrimitive("poly_3d", pts_3d)],
         )
         traj = torch.tensor([[0.0, 0.0], [5.0, 0.0]], dtype=torch.float32)
-        headings = torch.zeros(2, dtype=torch.float32)
 
         reward_fn = SafetyReward()
         reward = reward_fn.compute(
             ego_pose=(0.0, 0.0, 0.0),
             trajectory_xy=traj,
-            headings=headings,
             navigation_map=nav_map,
         )
         assert reward == pytest.approx(0.0, abs=1e-6)
 
     def test_polygons_with_fewer_than_3_points_ignored(self):
         """Polygons with fewer than 3 vertices are skipped, while valid ones are indexed."""
-        invalid_poly = MockPolygonPrimitive("line_primitive", np.array([[0.0, 0.0], [1.0, 1.0]]))
+        invalid_poly = MockPolygonPrimitive(
+            "line_primitive", np.array([[0.0, 0.0], [1.0, 1.0]])
+        )
         valid_poly = MockPolygonPrimitive(
             "triangle_primitive",
             np.array([[-10.0, -10.0], [10.0, -10.0], [0.0, 10.0]]),
@@ -289,16 +293,16 @@ class TestSafetyRewardOffRoad:
         reward = reward_fn.compute(
             ego_pose=(0.0, 0.0, 0.0),
             trajectory_xy=torch.tensor([[0.0, 0.0]]),
-            headings=torch.zeros(1),
             navigation_map=nav_map,
         )
         assert reward == pytest.approx(0.0, abs=1e-6)
 
-    def test_spatial_index_caching_and_invalidation(self, drivable_corridor_map: MockNavigationMap):
+    def test_spatial_index_caching_and_invalidation(
+        self, drivable_corridor_map: MockNavigationMap
+    ):
         """STRtree is cached across compute calls with the same map_version and rebuilt on version change."""
         reward_fn = SafetyReward()
         traj = torch.tensor([[1.0, 0.0]])
-        headings = torch.zeros(1)
 
         assert reward_fn._drivable_tree is None
         assert reward_fn._cached_map_version is None
@@ -307,7 +311,6 @@ class TestSafetyRewardOffRoad:
         reward_fn.compute(
             ego_pose=(0.0, 0.0, 0.0),
             trajectory_xy=traj,
-            headings=headings,
             navigation_map=drivable_corridor_map,
         )
         tree_v1 = reward_fn._drivable_tree
@@ -318,7 +321,6 @@ class TestSafetyRewardOffRoad:
         reward_fn.compute(
             ego_pose=(0.0, 0.0, 0.0),
             trajectory_xy=traj,
-            headings=headings,
             navigation_map=drivable_corridor_map,
         )
         assert reward_fn._drivable_tree is tree_v1
@@ -331,7 +333,6 @@ class TestSafetyRewardOffRoad:
         reward_fn.compute(
             ego_pose=(0.0, 0.0, 0.0),
             trajectory_xy=traj,
-            headings=headings,
             navigation_map=updated_map,
         )
         assert reward_fn._cached_map_version == "v2.0"
@@ -339,386 +340,167 @@ class TestSafetyRewardOffRoad:
 
 
 # ---------------------------------------------------------------------------
-# 2. Time-to-Collision (TTC) & Dynamic Agents Tests
+# 2. Ground-Truth Deviation Reward Tests
 # ---------------------------------------------------------------------------
 
 
-class TestSafetyRewardTTCAndCollisions:
-    """Tests covering TTC calculation, linear kinematics, and collision penalty scaling."""
+class TestGroundTruthDeviationReward:
+    """Tests covering trajectory tracking against ground truth and 3DGS boundary gating."""
 
-    def test_no_dynamic_agents(
-        self, drivable_corridor_map: MockNavigationMap, straight_trajectory_10_steps: tuple[torch.Tensor, torch.Tensor]
-    ):
-        """When no dynamic agents are in info, TTC penalty is 0.0."""
-        traj, headings = straight_trajectory_10_steps
-        reward_fn = SafetyReward()
-
-        reward_empty = reward_fn.compute(
-            ego_pose=(0.0, 0.0, 0.0),
-            trajectory_xy=traj,
-            headings=headings,
-            navigation_map=drivable_corridor_map,
-            info={"dynamic_agents": []},
-        )
-        reward_missing_key = reward_fn.compute(
-            ego_pose=(0.0, 0.0, 0.0),
-            trajectory_xy=traj,
-            headings=headings,
-            navigation_map=drivable_corridor_map,
-            info={},
-        )
-
-        assert reward_empty == pytest.approx(0.0, abs=1e-6)
-        assert reward_missing_key == pytest.approx(0.0, abs=1e-6)
-
-    def test_distant_agent_no_collision(
-        self, drivable_corridor_map: MockNavigationMap, straight_trajectory_10_steps: tuple[torch.Tensor, torch.Tensor]
-    ):
-        """Distant agent far from ego trajectory yields 0.0 TTC penalty."""
-        traj, headings = straight_trajectory_10_steps
-        reward_fn = SafetyReward()
-
-        info = {
-            "dynamic_agents": [
-                {
-                    "position": (500.0, 500.0),
-                    "velocity": (0.0, 0.0),
-                    "bbox_size": (4.0, 1.8),
-                    "yaw": 0.0,
-                }
-            ]
-        }
+    def test_exact_match_zero_penalty(self):
+        """When predicted trajectory perfectly matches ground truth, tracking penalty is 0.0."""
+        traj = np.array([[1.0, 0.0], [2.0, 0.0], [3.0, 0.0]], dtype=np.float32)
+        reward_fn = GroundTruthDeviationReward(ade_weight=1.0, fde_weight=0.5)
 
         reward = reward_fn.compute(
-            ego_pose=(0.0, 0.0, 0.0),
             trajectory_xy=traj,
-            headings=headings,
-            navigation_map=drivable_corridor_map,
-            info=info,
+            gt_trajectory=traj,
         )
         assert reward == pytest.approx(0.0, abs=1e-6)
 
-    def test_parallel_vehicle_no_collision(
-        self, drivable_corridor_map: MockNavigationMap, straight_trajectory_10_steps: tuple[torch.Tensor, torch.Tensor]
-    ):
-        """Vehicle traveling parallel in adjacent lane (lateral offset y=4.0m) does not collide."""
-        traj, headings = straight_trajectory_10_steps  # ego y=0.0, width=2.0 -> half_w=1.0 (bounds y in [-1, 1])
-        reward_fn = SafetyReward()
+    def test_constant_lateral_offset_penalty(self):
+        """Uniform 1.0m lateral offset yields ADE=1.0, FDE=1.0, and proportional negative penalty."""
+        traj_gt = np.zeros((10, 2), dtype=np.float32)
+        traj_gt[:, 0] = np.linspace(1.0, 10.0, 10)  # x in [1, 10], y = 0
 
-        # Agent at y=4.0, width=1.8 -> half_w=0.9 (bounds y in [3.1, 4.9]), no lateral overlap
-        info = {
-            "dynamic_agents": [
-                {
-                    "position": (5.0, 4.0),
-                    "velocity": (1.0, 0.0),
-                    "bbox_size": (4.0, 1.8),
-                    "yaw": 0.0,
-                }
-            ]
-        }
+        traj_pred = traj_gt.copy()
+        traj_pred[:, 1] = 1.0  # 1.0m lateral offset
 
+        reward_fn = GroundTruthDeviationReward(ade_weight=1.0, fde_weight=0.5)
+        # ADE = 1.0, FDE = 1.0 -> penalty = -(1.0 * 1.0 + 0.5 * 1.0) = -1.5
         reward = reward_fn.compute(
-            ego_pose=(0.0, 0.0, 0.0),
-            trajectory_xy=traj,
-            headings=headings,
-            navigation_map=drivable_corridor_map,
+            trajectory_xy=traj_pred,
+            gt_trajectory=traj_gt,
+        )
+        assert reward == pytest.approx(-1.5, abs=1e-6)
+
+    def test_fde_weighting(self):
+        """Diverging trajectory with larger final displacement reflects in FDE penalty."""
+        gt = np.zeros((4, 2), dtype=np.float32)
+        pred = np.array(
+            [[0.0, 0.0], [0.0, 1.0], [0.0, 2.0], [0.0, 3.0]], dtype=np.float32
+        )
+
+        # ADE = (0 + 1 + 2 + 3) / 4 = 1.5, FDE = 3.0
+        # penalty = -(2.0 * 1.5 + 1.0 * 3.0) = -6.0
+        reward_fn = GroundTruthDeviationReward(ade_weight=2.0, fde_weight=1.0)
+        reward = reward_fn.compute(
+            trajectory_xy=pred,
+            gt_trajectory=gt,
+        )
+        assert reward == pytest.approx(-6.0, abs=1e-6)
+
+    def test_3dgs_boundary_threshold_exceeded(self):
+        """When max deviation exceeds 3.0m, applies terminal penalty and flags is_out_of_bounds."""
+        gt = np.zeros((5, 2), dtype=np.float32)
+        pred = np.zeros((5, 2), dtype=np.float32)
+        pred[-1, 1] = 3.5  # > 3.0m threshold
+
+        info = {}
+        reward_fn = GroundTruthDeviationReward(
+            ade_weight=1.0,
+            fde_weight=0.0,
+            max_deviation_threshold=3.0,
+            terminal_penalty=10.0,
+        )
+        # ADE = 3.5 / 5 = 0.7. Terminal penalty = -10.0. Total = -10.7
+        reward = reward_fn.compute(
+            trajectory_xy=pred,
+            gt_trajectory=gt,
             info=info,
         )
-        assert reward == pytest.approx(0.0, abs=1e-6)
+        assert reward == pytest.approx(-10.7, abs=1e-6)
+        assert info.get("is_out_of_bounds") is True
+        assert info["reward_diagnostics"]["max_deviation"] == pytest.approx(
+            3.5, abs=1e-6
+        )
 
-    def test_immediate_collision_t_less_than_2s(self, drivable_corridor_map: MockNavigationMap):
-        """Collision at timestep i=5 where t_sec = 5 * 0.1 = 0.5s (< 2.0s).
+    def test_boundary_not_exceeded_within_threshold(self):
+        """When max deviation is within 3.0m threshold, no terminal penalty is applied."""
+        gt = np.zeros((5, 2), dtype=np.float32)
+        pred = np.zeros((5, 2), dtype=np.float32)
+        pred[-1, 1] = 2.9  # <= 3.0m
 
-        Penalty per colliding step is fixed at -5.0.
-        For a 10-step trajectory with 1 colliding step, total reward is -5.0 / 10 = -0.5.
-        """
-        # Ego trajectory: 10 steps, each step advances by 1.0m (from x=1 to x=10)
-        traj = torch.stack([torch.arange(1.0, 11.0), torch.zeros(10)], dim=-1)
-        headings = torch.zeros(10)
-
-        # Place stationary agent at x=6.0 (ego at step i=5 is at x=6.0)
-        # Ego bounding box at step 5: x in [6.0 - 2.35, 6.0 + 2.35] = [3.65, 8.35]
-        # Agent bounding box: x in [6.0 - 2.0, 6.0 + 2.0] = [4.0, 8.0] -> Collides at step 5!
-        # Step i=5 corresponds to t_sec = 0.5s < 2.0s -> penalty = -5.0
-        # To avoid collisions at other steps, use a small agent bbox
-        agent = {
-            "position": (6.0, 0.0),
-            "velocity": (0.0, 0.0),
-            "bbox_size": (0.5, 0.5),
-            "yaw": 0.0,
-        }
-
-        reward_fn = SafetyReward()
+        info = {}
+        reward_fn = GroundTruthDeviationReward(
+            ade_weight=1.0,
+            fde_weight=0.0,
+            max_deviation_threshold=3.0,
+            terminal_penalty=10.0,
+        )
         reward = reward_fn.compute(
-            ego_pose=(0.0, 0.0, 0.0),
-            trajectory_xy=traj,
-            headings=headings,
-            navigation_map=drivable_corridor_map,
-            info={"dynamic_agents": [agent]},
+            trajectory_xy=pred,
+            gt_trajectory=gt,
+            info=info,
         )
+        # ADE = 2.9 / 5 = 0.58. No terminal penalty.
+        assert reward == pytest.approx(-0.58, abs=1e-6)
+        assert info.get("is_out_of_bounds") is False
 
-        # Collision occurs at steps where ego_poly intersects agent at (6.0, 0.0).
-        # Ego center at step 3: x=4.0, front is 4.0 + 2.35 = 6.35 >= 5.75 -> collision at step 3, 4, 5, 6, 7.
-        # All these steps have t_sec = i * 0.1 <= 0.7s < 2.0s. Each gets -5.0.
-        assert reward < 0.0
+    def test_torch_tensor_and_numpy_parity(self):
+        """Parity between PyTorch Tensors (with grad) and NumPy arrays."""
+        gt_np = np.array([[1.0, 0.5], [2.0, 1.0], [3.0, 1.5]], dtype=np.float32)
+        pred_np = np.array([[1.0, 0.0], [2.0, 0.0], [3.0, 0.0]], dtype=np.float32)
 
-        # Now test single isolated collision step by setting trajectory where only index 5 is near agent:
-        traj_single = torch.zeros((10, 2))
-        traj_single[:, 1] = 0.0
-        traj_single[:, 0] = torch.tensor([100.0, 100.0, 100.0, 100.0, 100.0, 0.0, 100.0, 100.0, 100.0, 100.0])
-        # Agent placed at (0, 0)
-        agent_single = {
-            "position": (0.0, 0.0),
-            "velocity": (0.0, 0.0),
-            "bbox_size": (1.0, 1.0),
-            "yaw": 0.0,
-        }
+        gt_torch = torch.tensor(gt_np, requires_grad=False)
+        pred_torch = torch.tensor(pred_np, requires_grad=True)
 
-        reward_single = reward_fn.compute(
-            ego_pose=(0.0, 0.0, 0.0),
-            trajectory_xy=traj_single,
-            headings=torch.zeros(10),
-            navigation_map=drivable_corridor_map,
-            info={"dynamic_agents": [agent_single]},
-        )
-        # At i=5: t_sec = 0.5 < 2.0 -> ttc_penalty = -5.0. Total reward = -5.0 / 10 = -0.5
-        assert reward_single == pytest.approx(-0.5, abs=1e-6)
+        reward_fn = GroundTruthDeviationReward()
+        r_np = reward_fn.compute(trajectory_xy=pred_np, gt_trajectory=gt_np)
+        r_torch = reward_fn.compute(trajectory_xy=pred_torch, gt_trajectory=gt_torch)
 
-    def test_delayed_collision_t_greater_equal_2s(self, drivable_corridor_map: MockNavigationMap):
-        """Collision at timestep i=25 where t_sec = 25 * 0.1 = 2.5s (>= 2.0s).
+        assert isinstance(r_torch, float)
+        assert r_torch == pytest.approx(r_np, abs=1e-6)
 
-        Penalty per colliding step scales inversely with time: -(5.0 / t_sec) = -(5.0 / 2.5) = -2.0.
-        For a 50-step trajectory with 1 colliding step, total reward is -2.0 / 50 = -0.04.
-        """
-        num_steps = 50
-        # Ego trajectory where only step i=25 is at (0, 0), others far away inside corridor (x=50, y=0)
-        traj = torch.zeros((num_steps, 2))
-        traj[:, 0] = 50.0
-        traj[25] = torch.tensor([0.0, 0.0])
-        headings = torch.zeros(num_steps)
+    def test_missing_gt_trajectory_raises_error(self):
+        """Raises TypeError when gt_trajectory is not provided."""
+        reward_fn = GroundTruthDeviationReward()
+        with pytest.raises(TypeError):
+            reward_fn.compute(trajectory_xy=np.zeros((5, 2)))  # type: ignore
 
-        agent = {
-            "position": (0.0, 0.0),
-            "velocity": (0.0, 0.0),
-            "bbox_size": (1.0, 1.0),
-            "yaw": 0.0,
-        }
-
-        reward_fn = SafetyReward()
-        reward = reward_fn.compute(
-            ego_pose=(0.0, 0.0, 0.0),
-            trajectory_xy=traj,
-            headings=headings,
-            navigation_map=drivable_corridor_map,
-            info={"dynamic_agents": [agent]},
-        )
-
-        # At i=25, t_sec = 2.5s >= 2.0s -> penalty = -(5.0 / 2.5) = -2.0
-        # Average reward = -2.0 / 50 = -0.04
-        assert reward == pytest.approx(-2.0 / 50, abs=1e-6)
-
-    def test_ttc_penalty_monotonic_decay_with_time(self, drivable_corridor_map: MockNavigationMap):
-        """Verify delayed collision penalty is strictly weaker as time-to-collision increases."""
-        reward_fn = SafetyReward()
-        num_steps = 100
-
-        agent = {
-            "position": (0.0, 0.0),
-            "velocity": (0.0, 0.0),
-            "bbox_size": (1.0, 1.0),
-            "yaw": 0.0,
-        }
-
-        penalties = []
-        # Test collision at t=2.0s (i=20), t=4.0s (i=40), and t=8.0s (i=80)
-        for target_i in [20, 40, 80]:
-            traj = torch.zeros((num_steps, 2))
-            traj[:, 0] = 50.0
-            traj[target_i] = torch.tensor([0.0, 0.0])
-            r = reward_fn.compute(
-                ego_pose=(0.0, 0.0, 0.0),
-                trajectory_xy=traj,
-                headings=torch.zeros(num_steps),
-                navigation_map=drivable_corridor_map,
-                info={"dynamic_agents": [agent]},
+    def test_empty_trajectory_returns_zero(self):
+        """Empty trajectory returns 0.0 cleanly without exceptions."""
+        reward_fn = GroundTruthDeviationReward()
+        assert (
+            reward_fn.compute(
+                trajectory_xy=np.zeros((0, 2)), gt_trajectory=np.zeros((0, 2))
             )
-            penalties.append(r)
+            == 0.0
+        )
 
-        # Penalties: at t=2.0 -> -2.5/100, at t=4.0 -> -1.25/100, at t=8.0 -> -0.625/100
-        assert penalties[0] == pytest.approx(-2.5 / num_steps, abs=1e-6)
-        assert penalties[1] == pytest.approx(-1.25 / num_steps, abs=1e-6)
-        assert penalties[2] == pytest.approx(-0.625 / num_steps, abs=1e-6)
-        # Monotonic decay in penalty magnitude (less negative)
-        assert penalties[0] < penalties[1] < penalties[2] < 0.0
+    def test_length_mismatch_truncation(self):
+        """Unequal trajectory lengths are aligned to the shorter prefix."""
+        gt = np.zeros((10, 2), dtype=np.float32)
+        pred = np.zeros((5, 2), dtype=np.float32)
 
-    def test_multi_timestep_collision_spanning_under_and_over_2s(
-        self, drivable_corridor_map: MockNavigationMap
-    ):
-        """Collision spanning timesteps across the 2.0s threshold.
+        reward_fn = GroundTruthDeviationReward()
+        reward = reward_fn.compute(trajectory_xy=pred, gt_trajectory=gt)
+        assert reward == pytest.approx(0.0, abs=1e-6)
 
-        Step i=10 (t=1.0s < 2.0s): penalty = -5.0
-        Step i=25 (t=2.5s >= 2.0s): penalty = -5.0 / 2.5 = -2.0
-        Total penalty = -7.0 for 50 steps -> avg = -0.14.
-        """
-        num_steps = 50
-        traj = torch.zeros((num_steps, 2))
-        traj[:, 0] = 50.0
-        traj[10] = torch.tensor([0.0, 0.0])
-        traj[25] = torch.tensor([0.0, 0.0])
-        headings = torch.zeros(num_steps)
+    def test_info_diagnostics_logging(self):
+        """info dictionary is correctly populated with reward_diagnostics."""
+        gt = np.zeros((4, 2), dtype=np.float32)
+        pred = np.zeros((4, 2), dtype=np.float32)
+        info = {}
 
-        agent = {
-            "position": (0.0, 0.0),
-            "velocity": (0.0, 0.0),
-            "bbox_size": (1.0, 1.0),
-            "yaw": 0.0,
-        }
-
-        reward_fn = SafetyReward()
+        reward_fn = GroundTruthDeviationReward()
         reward = reward_fn.compute(
-            ego_pose=(0.0, 0.0, 0.0),
-            trajectory_xy=traj,
-            headings=headings,
-            navigation_map=drivable_corridor_map,
-            info={"dynamic_agents": [agent]},
+            trajectory_xy=pred,
+            gt_trajectory=gt,
+            info=info,
         )
-
-        expected_penalty = (-5.0 + -2.0) / num_steps
-        assert reward == pytest.approx(expected_penalty, abs=1e-6)
-
-    def test_dynamic_agent_linear_kinematics(self, drivable_corridor_map: MockNavigationMap):
-        """Agent moving towards ego trajectory: proj_pos = position + velocity * t_sec.
-
-        Agent initially at (20.0, 0.0) with vx = -5.0 m/s.
-        At t = 2.0s (i = 20), agent projects to x = 20.0 + (-5.0 * 2.0) = 10.0m.
-        Ego is at x = 10.0m at i = 20 -> Collision occurs at predicted interception!
-        """
-        num_steps = 30
-        traj = torch.zeros((num_steps, 2))
-        traj[:, 0] = 50.0
-        traj[20] = torch.tensor([10.0, 0.0])
-        headings = torch.zeros(num_steps)
-
-        agent = {
-            "position": (20.0, 0.0),
-            "velocity": (-5.0, 0.0),
-            "bbox_size": (1.0, 1.0),
-            "yaw": 0.0,
-        }
-
-        reward_fn = SafetyReward()
-        reward = reward_fn.compute(
-            ego_pose=(0.0, 0.0, 0.0),
-            trajectory_xy=traj,
-            headings=headings,
-            navigation_map=drivable_corridor_map,
-            info={"dynamic_agents": [agent]},
-        )
-
-        # At t=2.0s: penalty = -(5.0 / 2.0) = -2.5. Total = -2.5 / 30
-        assert reward == pytest.approx(-2.5 / num_steps, abs=1e-6)
-
-    def test_multiple_overlapping_agents_single_penalty_per_timestep(
-        self, drivable_corridor_map: MockNavigationMap
-    ):
-        """When multiple agents intersect ego at the same timestep, only one penalty is assessed."""
-        num_steps = 10
-        traj = torch.zeros((num_steps, 2))
-        traj[:, 0] = 50.0
-        traj[5] = torch.tensor([0.0, 0.0])
-        headings = torch.zeros(num_steps)
-
-        agent1 = {"position": (0.0, 0.0), "velocity": (0.0, 0.0), "bbox_size": (2.0, 2.0), "yaw": 0.0}
-        agent2 = {"position": (0.0, 0.0), "velocity": (0.0, 0.0), "bbox_size": (2.0, 2.0), "yaw": 0.0}
-
-        reward_fn = SafetyReward()
-        reward = reward_fn.compute(
-            ego_pose=(0.0, 0.0, 0.0),
-            trajectory_xy=traj,
-            headings=headings,
-            navigation_map=drivable_corridor_map,
-            info={"dynamic_agents": [agent1, agent2]},
-        )
-
-        # Single penalty of -5.0 assessed for timestep 5 (t=0.5s), average = -0.5
-        assert reward == pytest.approx(-0.5, abs=1e-6)
-
-    def test_agent_yaw_and_custom_bbox_size(self, drivable_corridor_map: MockNavigationMap):
-        """Custom agent dimensions and rotated yaw correctly orient the bounding box polygon."""
-        num_steps = 10
-        traj = torch.zeros((num_steps, 2))
-        traj[:, 0] = 50.0
-        # Ego at (0, 3.5), length 4.7 (half_l 2.35), width 2.0 (half_w 1.0) -> y in [2.5, 4.5]
-        traj[5] = torch.tensor([0.0, 3.5])
-        headings = torch.zeros(num_steps)
-
-        # Truck placed at (0, 0), length 8.0, width 2.0.
-        # If yaw = 0: truck extends x in [-4, 4], y in [-1, 1] -> does NOT intersect ego at y=3.5.
-        # If yaw = pi/2: truck extends x in [-1, 1], y in [-4, 4] -> INTERSECTS ego at y=3.5!
-        truck_aligned = {"position": (0.0, 0.0), "velocity": (0.0, 0.0), "bbox_size": (8.0, 2.0), "yaw": 0.0}
-        truck_rotated = {"position": (0.0, 0.0), "velocity": (0.0, 0.0), "bbox_size": (8.0, 2.0), "yaw": np.pi / 2}
-
-        reward_fn = SafetyReward()
-
-        reward_aligned = reward_fn.compute(
-            ego_pose=(0.0, 0.0, 0.0),
-            trajectory_xy=traj,
-            headings=headings,
-            navigation_map=drivable_corridor_map,
-            info={"dynamic_agents": [truck_aligned]},
-        )
-        reward_rotated = reward_fn.compute(
-            ego_pose=(0.0, 0.0, 0.0),
-            trajectory_xy=traj,
-            headings=headings,
-            navigation_map=drivable_corridor_map,
-            info={"dynamic_agents": [truck_rotated]},
-        )
-
-        assert reward_aligned == pytest.approx(0.0, abs=1e-6)
-        assert reward_rotated == pytest.approx(-0.5, abs=1e-6)
+        assert reward == pytest.approx(0.0, abs=1e-6)
+        assert "reward_diagnostics" in info
+        assert info["reward_diagnostics"]["ade"] == pytest.approx(0.0, abs=1e-6)
 
 
 # ---------------------------------------------------------------------------
-# 3. Combined Penalties & Edge Cases
+# 3. Off-Road Edge Cases & Input Validation
 # ---------------------------------------------------------------------------
 
 
 class TestSafetyRewardCombinedAndEdgeCases:
-    """Tests for combined violations, tensor types, missing parameters, and edge conditions."""
-
-    def test_combined_off_road_and_collision_penalties(
-        self, drivable_corridor_map: MockNavigationMap
-    ):
-        """Trajectory that has both off-road waypoints and an agent collision.
-
-        10 steps:
-        - 5 steps off-road (y=20.0) -> off_road_penalty = -5.0
-        - 1 step collision at i=2 (t=0.2s < 2.0s) -> ttc_penalty = -5.0
-        - Total reward = (-5.0 + -5.0) / 10 = -1.0
-        """
-        traj = torch.zeros((10, 2))
-        # Place inside steps far from agent (x=50, y=0)
-        traj[:, 0] = 50.0
-        # Ego at step 2 is at (0, 0)
-        traj[2] = torch.tensor([0.0, 0.0])
-        # Steps 5..9 off-road (y=20, x=0)
-        traj[5:, 0] = 0.0
-        traj[5:, 1] = 20.0
-        headings = torch.zeros(10)
-
-        agent = {"position": (0.0, 0.0), "velocity": (0.0, 0.0), "bbox_size": (1.0, 1.0), "yaw": 0.0}
-
-        reward_fn = SafetyReward()
-        reward = reward_fn.compute(
-            ego_pose=(0.0, 0.0, 0.0),
-            trajectory_xy=traj,
-            headings=headings,
-            navigation_map=drivable_corridor_map,
-            info={"dynamic_agents": [agent]},
-        )
-
-        assert reward == pytest.approx(-1.0, abs=1e-6)
+    """Tests for tensor types, missing parameters, and edge conditions."""
 
     def test_torch_tensor_with_grad_and_numpy_inputs(
         self, drivable_corridor_map: MockNavigationMap
@@ -728,12 +510,10 @@ class TestSafetyRewardCombinedAndEdgeCases:
 
         # 1. PyTorch Tensor with gradient tracking
         traj_torch = torch.tensor([[1.0, 0.0], [2.0, 0.0]], requires_grad=True)
-        headings_torch = torch.tensor([0.0, 0.0], requires_grad=True)
 
         r1 = reward_fn.compute(
             ego_pose=(0.0, 0.0, 0.0),
             trajectory_xy=traj_torch,
-            headings=headings_torch,
             navigation_map=drivable_corridor_map,
         )
         assert isinstance(r1, float)
@@ -741,11 +521,9 @@ class TestSafetyRewardCombinedAndEdgeCases:
 
         # 2. Numpy ndarray
         traj_np = np.array([[1.0, 0.0], [2.0, 0.0]], dtype=np.float32)
-        headings_np = np.array([0.0, 0.0], dtype=np.float32)
         r2 = reward_fn.compute(
             ego_pose=(0.0, 0.0, 0.0),
             trajectory_xy=traj_np,
-            headings=headings_np,
             navigation_map=drivable_corridor_map,
         )
         assert r2 == pytest.approx(0.0, abs=1e-6)
@@ -754,57 +532,46 @@ class TestSafetyRewardCombinedAndEdgeCases:
         r3 = reward_fn.compute(
             ego_pose=(0.0, 0.0, 0.0),
             trajectory_xy=[[1.0, 0.0], [2.0, 0.0]],
-            headings=[0.0, 0.0],
             navigation_map=drivable_corridor_map,
         )
         assert r3 == pytest.approx(0.0, abs=1e-6)
 
-    def test_empty_trajectory_returns_zero(self, drivable_corridor_map: MockNavigationMap):
+    def test_empty_trajectory_returns_zero(
+        self, drivable_corridor_map: MockNavigationMap
+    ):
         """Zero-step trajectory returns 0.0 scalar without division by zero errors."""
         reward_fn = SafetyReward()
         reward = reward_fn.compute(
             ego_pose=(0.0, 0.0, 0.0),
             trajectory_xy=torch.zeros((0, 2)),
-            headings=torch.zeros((0,)),
             navigation_map=drivable_corridor_map,
         )
         assert reward == pytest.approx(0.0, abs=1e-6)
 
-    def test_missing_required_kwargs_raises_value_error(
+    def test_missing_required_kwargs_raises_error(
         self, drivable_corridor_map: MockNavigationMap
     ):
-        """Missing ego_pose, trajectory_xy, headings, or navigation_map raises ValueError."""
+        """Missing ego_pose, trajectory_xy, or navigation_map raises TypeError."""
         reward_fn = SafetyReward()
         traj = torch.tensor([[1.0, 0.0]])
-        headings = torch.zeros(1)
 
-        with pytest.raises(ValueError, match="ego_pose, trajectory_xy, headings or nav_map was not passed"):
+        with pytest.raises(TypeError):
             reward_fn.compute(
                 trajectory_xy=traj,
-                headings=headings,
                 navigation_map=drivable_corridor_map,
-            )
+            )  # type: ignore
 
-        with pytest.raises(ValueError, match="ego_pose, trajectory_xy, headings or nav_map was not passed"):
+        with pytest.raises(TypeError):
             reward_fn.compute(
                 ego_pose=(0.0, 0.0, 0.0),
-                headings=headings,
                 navigation_map=drivable_corridor_map,
-            )
+            )  # type: ignore
 
-        with pytest.raises(ValueError, match="ego_pose, trajectory_xy, headings or nav_map was not passed"):
+        with pytest.raises(TypeError):
             reward_fn.compute(
                 ego_pose=(0.0, 0.0, 0.0),
                 trajectory_xy=traj,
-                navigation_map=drivable_corridor_map,
-            )
-
-        with pytest.raises(ValueError, match="ego_pose, trajectory_xy, headings or nav_map was not passed"):
-            reward_fn.compute(
-                ego_pose=(0.0, 0.0, 0.0),
-                trajectory_xy=traj,
-                headings=headings,
-            )
+            )  # type: ignore
 
     def test_empty_drivable_area_raises_value_error(self):
         """Navigation map with empty drivable polygons raises ValueError."""
@@ -815,21 +582,8 @@ class TestSafetyRewardCombinedAndEdgeCases:
             reward_fn.compute(
                 ego_pose=(0.0, 0.0, 0.0),
                 trajectory_xy=torch.tensor([[1.0, 0.0]]),
-                headings=torch.zeros(1),
                 navigation_map=empty_map,
             )
-
-    def test_shapely_missing_raises_import_error(self, drivable_corridor_map: MockNavigationMap):
-        """If shapely is unavailable, SafetyReward raises an informative ImportError."""
-        reward_fn = SafetyReward()
-        with patch("alpasim_autoe2e.rewards.Point", None):
-            with pytest.raises(ImportError, match="shapely is required for SafetyReward"):
-                reward_fn.compute(
-                    ego_pose=(0.0, 0.0, 0.0),
-                    trajectory_xy=torch.tensor([[1.0, 0.0]]),
-                    headings=torch.zeros(1),
-                    navigation_map=drivable_corridor_map,
-                )
 
 
 # ---------------------------------------------------------------------------
@@ -838,55 +592,65 @@ class TestSafetyRewardCombinedAndEdgeCases:
 
 
 class TestRewardRegistryAndFramework:
-    """Tests covering RewardRegistry, weight configurations, and base reward stubs."""
+    """Tests covering RewardRegistry, weight configurations, and active reward interfaces."""
 
     def test_reward_registry_initialization_and_computation(
-        self, drivable_corridor_map: MockNavigationMap, straight_trajectory_10_steps: tuple[torch.Tensor, torch.Tensor]
+        self,
+        drivable_corridor_map: MockNavigationMap,
+        straight_trajectory_10_steps: tuple[torch.Tensor, torch.Tensor],
     ):
         """RewardRegistry initializes active rewards based on config keys and computes weighted total."""
         traj, headings = straight_trajectory_10_steps
         weights = {
-            "w_safe": 2.0,
-            "w_prog": 1.0,
-            "w_comf": 0.5,
-            "w_reason": 1.5,
-            "lambda_il": -0.1,
+            "w_gt_dev": 2.0,
+            "w_safe": 1.0,
         }
 
         registry = RewardRegistry(config_weights=weights)
 
+        assert "w_gt_dev" in registry.rewards
         assert "w_safe" in registry.rewards
+        assert isinstance(registry.rewards["w_gt_dev"], GroundTruthDeviationReward)
         assert isinstance(registry.rewards["w_safe"], SafetyReward)
-        assert isinstance(registry.rewards["w_prog"], ProgressReward)
-        assert isinstance(registry.rewards["w_comf"], ComfortReward)
-        assert isinstance(registry.rewards["w_reason"], ReasoningReward)
-        assert isinstance(registry.rewards["lambda_il"], ImitationAnchor)
 
         total_reward, components = registry.compute_total_reward(
             ego_pose=(0.0, 0.0, 0.0),
             trajectory_xy=traj,
+            gt_trajectory=traj,
             headings=headings,
             navigation_map=drivable_corridor_map,
             speed=10.0,
             acceleration=0.0,
             yaw_rate=0.0,
-            info={"dynamic_agents": []},
-            reasoning_faithfulness_gate=0.8,
         )
 
+        assert "w_gt_dev" in components
         assert "w_safe" in components
+        assert components["w_gt_dev"] == pytest.approx(0.0, abs=1e-6)
         assert components["w_safe"] == pytest.approx(0.0, abs=1e-6)
         assert total_reward == pytest.approx(0.0, abs=1e-6)
 
-    def test_reasoning_reward_faithfulness_gate(self):
-        """ReasoningReward scales by the causal faithfulness gate scalar g."""
-        reward_fn = ReasoningReward()
-        g_val = 0.75
-        reward = reward_fn.compute(reasoning_faithfulness_gate=g_val)
-        assert isinstance(reward, float)
+    def test_reward_registry_alternative_keys_and_aliases(self):
+        """RewardRegistry supports w_gt and w_offroad alias keys."""
+        registry = RewardRegistry(config_weights={"w_gt": 1.5, "w_offroad": 0.5})
+        assert "w_gt" in registry.rewards
+        assert "w_offroad" in registry.rewards
+        assert isinstance(registry.rewards["w_gt"], GTDeviationReward)
+        assert isinstance(registry.rewards["w_offroad"], OffRoadReward)
 
-    def test_auxiliary_reward_stubs_return_float(self):
-        """ProgressReward, ComfortReward, and ImitationAnchor return scalar floats."""
-        assert isinstance(ProgressReward().compute(), float)
-        assert isinstance(ComfortReward().compute(), float)
-        assert isinstance(ImitationAnchor().compute(), float)
+    def test_reward_registry_weight_scaling(self):
+        """Total reward scales linearly according to configured component weights."""
+        traj = np.zeros((4, 2), dtype=np.float32)
+        gt = np.ones(
+            (4, 2), dtype=np.float32
+        )  # error = sqrt(1+1) = sqrt(2) approx 1.4142
+
+        registry = RewardRegistry(config_weights={"w_gt_dev": 3.0})
+        total, comps = registry.compute_total_reward(
+            trajectory_xy=traj, gt_trajectory=gt
+        )
+        # ADE = sqrt(2), FDE = sqrt(2). Default ade_weight=1.0, fde_weight=0.5 -> penalty = -1.5 * sqrt(2)
+        # Total = 3.0 * (-1.5 * sqrt(2)) = -4.5 * sqrt(2)
+        expected_penalty = -(1.0 * np.sqrt(2) + 0.5 * np.sqrt(2))
+        assert comps["w_gt_dev"] == pytest.approx(expected_penalty, abs=1e-5)
+        assert total == pytest.approx(3.0 * expected_penalty, abs=1e-5)

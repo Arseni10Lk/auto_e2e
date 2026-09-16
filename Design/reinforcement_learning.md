@@ -103,13 +103,29 @@ The plugin establishes a input/output contract for the AutoE2E model:
 - **`trajectory_xy`**: Projected waypoint coordinates `[64, 2]` in the rig frame (*X* forward, *Y* left).
 - **`headings`**: Target vehicle headings `[64]` in radians.
 
-## 6. Reward Design (Future Work)
+## 6. Reward Design
 
-Based on the [Issue #123](https://github.com/autowarefoundation/auto_e2e/issues/123) proposal for stage-3 closed-loop RL, the reward function must address a core constraint: **a reward computed from information the policy already observes cannot change the policy's ranking of actions, it can only re-weight it.** Therefore, the shaping signal must carry information the policy does not otherwise have (e.g., predicted consequences, un-pooled spatial structure, or external ground truth).
+### 6.1 Phase 1 (Implemented): Ground-Truth Deviation & 3DGS Boundary Gating
 
-### 6.1 The v1 Reward Formula
+For initial Stage-3 closed-loop bring-up, the policy is evaluated against the recorded expert demonstration rather than complex multi-agent collision checks. This addresses two physical constraints:
+1. **Raw Sensor Stream Availability:** Real-world datasets (such as KITScenes) provide high-resolution camera streams and Lanelet2 HD maps, but do not provide ground-truth 3D bounding box annotations for all dynamic agents at runtime.
+2. **3DGS Novel View Degradation:** The NuRec environment is reconstructed from camera observations captured along the logged trajectory. Deviating beyond approximately 3.0 meters enters under-sampled regions of the 3D Gaussian Splatting representation, introducing visual ghosting artifacts that corrupt policy observation.
 
-The baseline reward for the RL loop is defined as:
+Therefore, the **Phase 1 active reward** is formulated as:
+
+```python
+R = w_gt_dev * R_track + R_bound + w_safe * R_offroad
+```
+
+- **Trajectory Tracking Penalty ($R_{\text{track}}$):** Continuous penalty on displacement error across the predicted horizon:
+  $$R_{\text{track}} = - (\alpha \cdot \text{ADE} + \beta \cdot \text{FDE})$$
+- **3DGS Degradation & Boundary Violation ($R_{\text{bound}}$):** If maximum trajectory displacement or ego pose deviates beyond $d_{\text{max}} = 3.0\,\text{m}$, a terminal penalty is applied and the episode is truncated early:
+  $$\text{is\_out\_of\_bounds} = \max_t \|\hat{\mathbf{p}}_t - \mathbf{p}^*_t\|_2 > 3.0\,\text{m}$$
+- **Drivable Area Penalty ($R_{\text{offroad}}$):** Evaluated against Lanelet2 drivable polygons using spatial indexing (`STRtree`).
+
+### 6.2 Phase 2 (Future Work): Multi-Objective Reward Formulation
+
+Based on the [Issue #123](https://github.com/autowarefoundation/auto_e2e/issues/123) proposal for mature stage-3 closed-loop RL, once dynamic bounding box perception and counterfactual simulation modules are established, the reward function will expand to a non-redundant multi-objective registry:
 
 ```python
 R = w_safe * R_safety          # collision / off-road / TTC violation (hard, handcrafted)
@@ -121,13 +137,13 @@ R = w_safe * R_safety          # collision / off-road / TTC violation (hard, han
 
 *(Note: Keeping Imitation Learning as a regularization term inside RL is directly motivated by **RAD** [3]).*
 
-### 6.2 The Faithfulness Gate (`g`)
+#### 6.2.1 The Faithfulness Gate (`g`)
 
 A major risk in neural reward models is reward hacking, where the policy emits a reason that *matches* its action to farm rewards, even if that reason did not actually cause the action (a "plausible narrative", as warned in **LaViPlan** [4]).
 
 To prevent this and enforce true reasoning-action consistency (**Alpamayo-R1** [5]), the `R_reason` term is multiplied by `g`, a **faithfulness gate**. `g` measures the causal coupling (via intervention delta). The reasoning-shaped reward contributes *only* when the reasoning is verifiably causal for the policy's trajectory. If `g` reads zero (as it does in early checkpoints), the term contributes nothing, falling back smoothly to the safety/progress baselines.
 
-### 6.3 Progress as a Safety Metric
+#### 6.2.2 Progress as a Safety Metric
 
 An imitation-only policy evaluated in AlpaSim demonstrated that safety/compliance terms alone score a stationary vehicle as near-perfect. Thus, `R_progress` is treated as a first-class safety metric; under-progress (e.g., driving 44 km/h slower than traffic) guarantees rear-end collisions.
 

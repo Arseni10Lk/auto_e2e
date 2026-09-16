@@ -13,11 +13,8 @@ driver:
     allow_untrained_model: false
     device: "cuda"
     rewards:
-      w_safe: 1.0
-      w_prog: 1.0
-      w_comf: 0.1
-      w_reason: 0.5
-      lambda_il: 0.05
+      w_gt_dev: 1.0
+      w_safe: 0.5
 
   host: "0.0.0.0"
   port: ???
