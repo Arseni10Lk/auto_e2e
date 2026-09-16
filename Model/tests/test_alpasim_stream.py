@@ -516,11 +516,9 @@ class TestAlpasimDriverPlugin:
         result = driver.predict(pred_input)
 
         assert isinstance(result, ModelPrediction)
-        assert hasattr(result, "trajectory_xy") or hasattr(result, "trajectory_points")
-        traj = getattr(result, "trajectory_xy", getattr(result, "trajectory_points", None))
-        assert isinstance(traj, np.ndarray)
+        assert isinstance(result.trajectory_xy, np.ndarray)
         assert isinstance(result.headings, np.ndarray)
-        assert traj.shape == (64, 2)
+        assert result.trajectory_xy.shape == (64, 2)
         assert result.headings.shape == (64,)
         assert traj.dtype == np.float32
         assert result.headings.dtype == np.float32

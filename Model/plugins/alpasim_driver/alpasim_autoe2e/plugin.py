@@ -1,65 +1,47 @@
-from typing import Any, Dict, List, cast
-import os
-import sys
-import torch
-import numpy as np
-import logging
+from typing import Any, List
 import math
-from dataclasses import dataclass, field
+from pathlib import Path
 
-_REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-if _REPO_ROOT not in sys.path:
-    sys.path.insert(0, _REPO_ROOT)
+import numpy as np
+import torch
+from alpasim_driver.models.base import (
+    BaseTrajectoryModel,
+    ModelPrediction,
+    PredictionInput,
+)
 
-# Resolve ALPASIM_ROOT from environment variable or check .alpasim / scratch/alpasim in repo root
-_ALPASIM_ROOT = os.environ.get("ALPASIM_ROOT", os.path.join(_REPO_ROOT, ".alpasim"))
-
-if os.path.exists(_ALPASIM_ROOT):
-    _alpasim_src = os.path.join(_ALPASIM_ROOT, "src")
-    for sub in ["driver", "plugins", "grpc", "utils", "controller", "physics", "runtime"]:
-        for p in [os.path.join(_alpasim_src, sub, "src"), os.path.join(_alpasim_src, sub)]:
-            if os.path.exists(p) and p not in sys.path:
-                sys.path.insert(0, p)
+from .config import DEFAULT_CAMERA_NAMES
+from .parser import AlpasimStreamParser
 
 
-IS_MOCK_MODE = False
-
-try:
-    from alpasim_driver.models.base import (
-        BaseTrajectoryModel,
-        PredictionInput,
-        ModelPrediction,
+def _extract_yaw(quat: Any) -> float:
+    """Extract yaw heading angle from quaternion."""
+    return math.atan2(
+        2.0 * (quat.w * quat.z + quat.x * quat.y),
+        1.0 - 2.0 * (quat.y**2 + quat.z**2),
     )
-except ImportError:
-    IS_MOCK_MODE = True
 
-    @dataclass
-    class _MockPredictionInput:
-        camera_images: Dict[str, Any] = field(default_factory=dict)
-        speed: float = 0.0
-        acceleration: float = 0.0
-        ego_pose_history: List[Any] | None = None
-        inference_seed: int = 0
 
-    @dataclass
-    class _MockModelPrediction:
-        trajectory_xy: np.ndarray
-        headings: np.ndarray
-        reasoning_text: str | None = None
+def _unroll_unicycle_controls(
+    controls: np.ndarray, v_init: float, dt: float = 0.1
+) -> tuple[np.ndarray, np.ndarray]:
+    """Integrate (acceleration, curvature) controls into (x, y) waypoints and headings."""
+    points = np.zeros_like(controls, dtype=np.float32)
+    headings = np.zeros(len(controls), dtype=np.float32)
+    x, y, theta = 0.0, 0.0, 0.0
+    v = v_init
 
-    class _MockBaseTrajectoryModel:
-        def __init__(self, *args: Any, **kwargs: Any) -> None:
-            pass
-        def predict(self, input_data: Any) -> Any:
-            raise NotImplementedError
+    for i in range(len(controls)):
+        a, k = controls[i, 0], controls[i, 1]
+        x += v * math.cos(theta) * dt
+        y += v * math.sin(theta) * dt
+        theta += v * k * dt
+        v += a * dt
+        points[i, 0] = x
+        points[i, 1] = y
+        headings[i] = theta
 
-    PredictionInput = _MockPredictionInput  # type: ignore
-    ModelPrediction = _MockModelPrediction  # type: ignore
-    BaseTrajectoryModel = _MockBaseTrajectoryModel  # type: ignore
-
-from .parser import AlpasimStreamParser, PredictionInput as ParserPredictionInput  # noqa: E402
-
-logger = logging.getLogger(__name__)
+    return points, headings
 
 
 class AutoE2EDriver(BaseTrajectoryModel):
@@ -71,100 +53,61 @@ class AutoE2EDriver(BaseTrajectoryModel):
         allow_mock: bool = False,
         allow_untrained_model: bool = False,
         camera_ids: List[str] | None = None,
-        rewards: Dict[str, float] | None = None,
-        **kwargs: Any
+        scene_id: str | None = None,
     ) -> None:
         super().__init__()
         self.allow_mock = allow_mock
         self.allow_untrained_model = allow_untrained_model
-        
-        # Verify AlpaSim integration exists
-        if not self.allow_mock and IS_MOCK_MODE:
-            raise ImportError(
-                "alpasim.models is not available. Please install the alpasim package "
-                "or run with allow_mock=True."
-            )
-            
         self.model_checkpoint = model_checkpoint
-        
-        from .config import AutoE2EAlpaSimConfig
-        config = AutoE2EAlpaSimConfig(checkpoint_path=self.model_checkpoint)
-        
-        if camera_ids is None:
-            camera_ids = config.camera_names
-        self._camera_ids = camera_ids
-        
-        # Initialize RL Reward Manager
-        from .rewards import RewardManager
-        self.reward_manager = RewardManager(**(rewards or {}))
-        
+        self._camera_ids = camera_ids or DEFAULT_CAMERA_NAMES
+
         self.parser = AlpasimStreamParser(
             camera_names=self._camera_ids,
-            scene_id=config.scene_id
+            scene_id=scene_id,
         )
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.model = None
 
-        if model_checkpoint and os.path.exists(model_checkpoint):
+        if model_checkpoint and Path(model_checkpoint).exists():
             checkpoint = torch.load(model_checkpoint, map_location=self.device)
-            if isinstance(checkpoint, dict) and "model_state_dict" in checkpoint:
-                try:
-                    from model_components.auto_e2e import AutoE2E
-                    self.model = AutoE2E(num_views=len(self._camera_ids), is_pretrained=False).to(self.device)
-                    self.model.load_state_dict(checkpoint["model_state_dict"])
-                except Exception as e:
-                    logger.error("Failed to load AutoE2E model from state_dict: %s", e)
-            else:
+            if hasattr(checkpoint, "forward"):
                 self.model = checkpoint
-            
-            if self.model is not None:
-                self.model.eval()
-        elif self.allow_untrained_model:
-            try:
-                from model_components.auto_e2e import AutoE2E
-                logger.info("Checkpoint path '%s' not found. Initializing untrained AutoE2E model (allow_untrained_model=True).", model_checkpoint)
-                self.model = AutoE2E(num_views=len(self._camera_ids), is_pretrained=False).to(self.device)
-                self.model.eval()
-            except Exception as e:
-                logger.error("Failed to initialize untrained AutoE2E model: %s", e)
-        else:
-            if not self.allow_mock:
-                logger.warning(
-                    "Checkpoint path '%s' not found, allow_mock=False, and allow_untrained_model=False. "
-                    "Driver will fail on predict() unless a model checkpoint is provided.", model_checkpoint
-                )
             else:
-                logger.warning("Checkpoint path '%s' not found. AutoE2EDriver will use mock trajectory outputs.", model_checkpoint)
+                from model_components.auto_e2e import AutoE2E
+
+                self.model = AutoE2E(
+                    num_views=len(self._camera_ids), is_pretrained=False
+                ).to(self.device)
+                self.model.load_state_dict(checkpoint["model_state_dict"])
+
+            self.model.eval()
+        elif self.allow_untrained_model:
+            from model_components.auto_e2e import AutoE2E
+
+            self.model = AutoE2E(
+                num_views=len(self._camera_ids), is_pretrained=False
+            ).to(self.device)
+            self.model.eval()
+        elif not self.allow_mock:
+            raise FileNotFoundError(
+                f"Model checkpoint '{model_checkpoint}' not found and allow_mock=False."
+            )
 
     @classmethod
     def from_config(
         cls,
-        model_cfg: Any,
-        device: torch.device,
-        camera_ids: List[str],
-        context_length: int | None,
-        output_frequency_hz: int,
-        allow_mock: bool = False,
-        allow_untrained_model: bool = False,
+        model_cfg: Any = None,
+        device: torch.device = torch.device("cpu"),
+        camera_ids: List[str] | None = None,
+        context_length: int | None = None,
+        output_frequency_hz: int = 10,
     ) -> "AutoE2EDriver":
-        checkpoint_path = getattr(model_cfg, "checkpoint_path", "dummy_random.ckpt")
-        
-        allow_mock_cfg = getattr(model_cfg, "allow_mock", allow_mock)
-        if checkpoint_path == "MOCK":
-            allow_mock_cfg = True
-            
-        allow_untrained_cfg = getattr(model_cfg, "allow_untrained_model", allow_untrained_model)
-        if checkpoint_path == "UNTRAINED":
-            allow_untrained_cfg = True
-            
-        rewards_cfg = getattr(model_cfg, "rewards", {})
-            
+        checkpoint_path = model_cfg.checkpoint_path if model_cfg is not None else "MOCK"
         driver = cls(
             model_checkpoint=checkpoint_path,
-            allow_mock=allow_mock_cfg,
-            allow_untrained_model=allow_untrained_cfg,
+            allow_mock=checkpoint_path == "MOCK" or not checkpoint_path,
+            allow_untrained_model=checkpoint_path == "UNTRAINED",
             camera_ids=camera_ids,
-            rewards=rewards_cfg,
         )
         driver.device = device
         return driver
@@ -181,146 +124,82 @@ class AutoE2EDriver(BaseTrajectoryModel):
     def output_frequency_hz(self) -> int:
         return 10
 
-    def _encode_command(self, command: Any) -> int:
-        """Convert canonical DriveCommand to model integer encoding."""
-        if isinstance(command, int):
-            return int(command)
-        return int(getattr(command, "value", 0))
+    def _encode_command(self, command: Any) -> None:
+        """AutoE2E predicts trajectories end-to-end without discrete driving commands."""
+        return None
 
-    def predict(self, input_data: Any) -> ModelPrediction:
+    def predict(self, input_data: PredictionInput) -> ModelPrediction:
         """Process real-time PredictionInput to ModelPrediction.
-        
-        Returns:
-            ModelPrediction with trajectory_points / trajectory_xy [64, 2] and headings [64].
-        """
-        # Extract cameras dict
-        cameras_dict: Dict[str, Any] = {}
-        if hasattr(input_data, "camera_images") and input_data.camera_images:
-            for cam_name, frames in input_data.camera_images.items():
-                if not frames:
-                    cameras_dict[cam_name] = None
-                    continue
-                
-                if isinstance(frames, list):
-                    frame = frames[-1]
-                else:
-                    frame = frames
-                    
-                if hasattr(frame, "image"):
-                    cameras_dict[cam_name] = frame.image
-                elif isinstance(frame, tuple):
-                    if len(frame) == 2:
-                        cameras_dict[cam_name] = frame[1]
-                    else:
-                        cameras_dict[cam_name] = frame[-1]
-                else:
-                    cameras_dict[cam_name] = frame
-        elif hasattr(input_data, "cameras"):
-            cameras_dict = input_data.cameras
 
-        speed = float(getattr(input_data, "speed", 0.0))
-        acceleration = float(getattr(input_data, "acceleration", 0.0))
-        raw_cmd = getattr(input_data, "command", 0)
-        command = self._encode_command(raw_cmd)
-        
+        Returns:
+            ModelPrediction with trajectory_xy [64, 2] and headings [64].
+        """
+        cameras_dict = {
+            cam_name: frames[-1].image
+            for cam_name, frames in input_data.camera_images.items()
+        }
+
+        speed = input_data.speed
+        acceleration = input_data.acceleration
+
         yaw_rate = 0.0
         curvature = 0.0
         ego_pose = None
-        ego_pose_history = getattr(input_data, "ego_pose_history", None)
+        ego_pose_history = input_data.ego_pose_history
         if ego_pose_history and len(ego_pose_history) >= 2:
             prev = ego_pose_history[-2]
             curr = ego_pose_history[-1]
             dt = (curr.timestamp_us - prev.timestamp_us) / 1_000_000.0
-            
-            def extract_yaw(quat: Any) -> float:
-                return float(math.atan2(2.0 * (quat.w * quat.z + quat.x * quat.y), 1.0 - 2.0 * (quat.y**2 + quat.z**2)))
-            
-            curr_yaw = extract_yaw(curr.pose.quat)
-            ego_pose = (float(curr.pose.x), float(curr.pose.y), curr_yaw)
+
+            curr_yaw = _extract_yaw(curr.pose.quat)
+            ego_pose = (curr.pose.x, curr.pose.y, curr_yaw)
 
             if dt > 0:
-                prev_yaw = extract_yaw(prev.pose.quat)
-                diff = curr_yaw - prev_yaw
-                diff = math.atan2(math.sin(diff), math.cos(diff))
+                prev_yaw = _extract_yaw(prev.pose.quat)
+                diff = math.atan2(
+                    math.sin(curr_yaw - prev_yaw), math.cos(curr_yaw - prev_yaw)
+                )
                 yaw_rate = diff / dt
                 curvature = yaw_rate / max(speed, 0.1)
 
-        input_dict = cast(ParserPredictionInput, {
+        observation = {
             "cameras": cameras_dict,
             "speed": speed,
             "acceleration": acceleration,
-            "command": command,
             "yaw_rate": yaw_rate,
             "curvature": curvature,
             "ego_pose": ego_pose,
-        })
-        
-        parsed = self.parser.parse_observation(input_dict)
-        tensors: dict[str, Any] = {k: v.to(self.device) for k, v in parsed.items()}
-        
-        if "camera_params" in tensors:
-            from model_components.view_fusion import PinholeProjection
-            camera_params = tensors.pop("camera_params")
-            tensors["projection"] = PinholeProjection(camera_params)
-            tensors["geometry_type"] = "pinhole"
-            
+        }
+
+        parsed = self.parser.parse_observation(observation)
+        tensors = {
+            k: v.to(self.device) if hasattr(v, "to") else v for k, v in parsed.items()
+        }
+
         if self.model is not None:
             with torch.no_grad():
                 outputs = self.model(**tensors, mode="inference")
-
-                if isinstance(outputs, dict):
-                    points = outputs["trajectory_points"][0].cpu().numpy() if isinstance(outputs.get("trajectory_points"), torch.Tensor) else outputs["trajectory_points"][0]
-                    headings = outputs["headings"][0].cpu().numpy() if isinstance(outputs.get("headings"), torch.Tensor) else outputs["headings"][0]
-                elif isinstance(outputs, torch.Tensor):
-                    pts_tensor = outputs[0].cpu().numpy()
-                    if pts_tensor.ndim == 1 and pts_tensor.shape[0] == 128:
-                        controls = pts_tensor.reshape(64, 2)
-                        points = np.zeros((64, 2), dtype=np.float32)
-                        headings = np.zeros(64, dtype=np.float32)
-                        
-                        dt = 0.1  # 10Hz planning rate
-                        v = float(input_dict["speed"])
-                        x, y, theta = 0.0, 0.0, 0.0
-                        
-                        for i in range(64):
-                            a, k = controls[i, 0], controls[i, 1]
-                            
-                            # Kinematic unicycle update
-                            x += v * np.cos(theta) * dt
-                            y += v * np.sin(theta) * dt
-                            theta += v * k * dt
-                            v += a * dt
-                            
-                            points[i, 0] = x
-                            points[i, 1] = y
-                            headings[i] = theta
-                    else:
-                        raise ValueError(f"Unexpected tensor shape from AutoE2E: {pts_tensor.shape}")
-                else:
-                    raise TypeError(f"Unexpected model output type: {type(outputs)}")
+                points, headings = _unroll_unicycle_controls(
+                    outputs[0].cpu().numpy().reshape(64, 2), speed
+                )
         else:
             if not self.allow_mock:
                 raise RuntimeError(
                     f"Model checkpoint '{self.model_checkpoint}' failed to load and allow_mock=False. "
                     "Cannot execute live inference without a loaded model."
                 )
-            # Fallback mock output if model file is missing and allow_mock is True
-            t = np.linspace(0, 20, 64)
-            points = np.stack([t, 0.5 * t ** 2], axis=1)
-            headings = np.arctan2(t, np.ones_like(t))
+            x = np.linspace(0.0, max(speed, 1.0) * 6.4, 64, dtype=np.float32)
+            points = np.stack([x, np.zeros(64, dtype=np.float32)], axis=1)
+            headings = np.zeros(64, dtype=np.float32)
 
-        try:
-            return ModelPrediction(
-                trajectory_xy=points,
-                headings=headings
-            )
-        except TypeError:
-            return ModelPrediction(
-                trajectory_points=points,
-                headings=headings
-            )
+        return ModelPrediction(
+            trajectory_xy=points.astype(np.float32),
+            headings=headings.astype(np.float32),
+        )
 
 
-AutoE2EAlpaSimModel = AutoE2EDriver
-
-
+__all__ = [
+    "AutoE2EDriver",
+    "ModelPrediction",
+    "PredictionInput",
+]

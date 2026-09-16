@@ -6,7 +6,32 @@ Defines model checkpoints, camera topology settings, and trajectory planning hor
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import json
+from pathlib import Path
 from typing import List, Tuple, Dict
+
+_CALIB_DIR = Path(__file__).resolve().parent / "configs" / "calibration"
+
+DEFAULT_CAMERA_NAMES: List[str] = [
+    "camera_base_front_center",
+    "camera_ring_front",
+    "camera_ring_front_left",
+    "camera_ring_front_right",
+    "camera_ring_rear",
+    "camera_ring_rear_left",
+    "camera_ring_rear_right",
+]
+
+
+def load_projection_matrices(
+    calibration_path: str | Path | None = None,
+) -> Dict[str, list[list[float]]]:
+    """Load camera projection matrices from a JSON calibration file."""
+    path = (
+        Path(calibration_path) if calibration_path else _CALIB_DIR / "kit_scenes.json"
+    )
+    with open(path, "r", encoding="utf-8") as f:
+        return json.load(f)
 
 
 @dataclass
@@ -36,17 +61,7 @@ class AutoE2EAlpaSimConfig:
     planning_steps: int = 64
     """Number of output waypoint steps along the planning horizon."""
 
-    camera_names: List[str] = field(
-        default_factory=lambda: [
-            "camera_base_front_center",
-            "camera_ring_front",
-            "camera_ring_front_left",
-            "camera_ring_front_right",
-            "camera_ring_rear",
-            "camera_ring_rear_left",
-            "camera_ring_rear_right",
-        ]
-    )
+    camera_names: List[str] = field(default_factory=lambda: list(DEFAULT_CAMERA_NAMES))
     """List of 7 camera names matching KitScenes topology."""
 
     scene_id: str | None = None

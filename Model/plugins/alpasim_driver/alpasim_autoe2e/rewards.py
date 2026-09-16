@@ -128,7 +128,7 @@ class RewardManager:
         self.gt_reward = gt_reward or GroundTruthDeviationReward()
         self.offroad_reward = offroad_reward or OffRoadReward()
 
-        if (self.gt_reward is None and self.offroad_reward is None):
+        if self.gt_reward is None and self.offroad_reward is None:
             raise ValueError("At least one reward should be passed")
 
     def compute(
