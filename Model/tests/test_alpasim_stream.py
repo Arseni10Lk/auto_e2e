@@ -21,6 +21,8 @@ _ALPASIM_DRIVER_DIR = Path(__file__).resolve().parents[1] / "plugins" / "alpasim
 if str(_ALPASIM_DRIVER_DIR) not in sys.path:
     sys.path.insert(0, str(_ALPASIM_DRIVER_DIR))
 
+pytest.importorskip("alpasim_driver")
+
 from alpasim_autoe2e.config import AutoE2EAlpaSimConfig  # noqa: E402
 from alpasim_autoe2e.plugin import (  # noqa: E402
     AutoE2EDriver,

@@ -110,7 +110,7 @@ class AlpasimStreamParser:
             frames.append(self._decode_image(frame_data))
         visual_tiles = torch.stack(frames).unsqueeze(0)
 
-        self._egomotion_buffer = np.roll(self._egomotion_buffer, shift=-1, axis=0)
+        self._egomotion_buffer[:-1] = self._egomotion_buffer[1:]
         self._egomotion_buffer[-1] = [
             observation["speed"],
             observation["acceleration"],
