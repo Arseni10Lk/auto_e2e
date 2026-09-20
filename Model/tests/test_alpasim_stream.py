@@ -40,6 +40,19 @@ from data_parsing.pre_extracted import (  # noqa: E402
 
 class MockAutoE2EModel(torch.nn.Module):
     def forward(self, **kwargs):
+        for kw in (
+            "camera_params",
+            "camera_matrices",
+            "calib",
+            "calibration",
+            "intrinsics",
+            "extrinsics",
+            "projection_matrix",
+        ):
+            if kw in kwargs:
+                raise TypeError(
+                    f"AutoE2E.forward no longer accepts '{kw}=' matrix input."
+                )
         return torch.zeros((1, 64, 2))
 
 torch.serialization.add_safe_globals([MockAutoE2EModel])
@@ -456,22 +469,25 @@ class TestEdgeCasesAndDiscrepancies:
             "Frames should not be empty since the camera names match."
         )
 
-    def test_camera_params_present_in_stream_parser(
+    def test_camera_params_not_in_stream_parser_output(
         self, valid_prediction_input: PredictionInput
     ) -> None:
-        """Verify AlpasimStreamParser output dictionary contains 'camera_params'.
+        """Verify AlpasimStreamParser output dictionary does NOT contain 'camera_params'.
 
-        It should provide dummy camera parameters matching the expected shape.
+        AutoE2E.forward rejects raw camera matrices like 'camera_params' in kwargs.
+        The parser must provide 'projection' and internal camera_params attribute instead.
         """
         parser = AlpasimStreamParser(camera_names=PARSER_CAMERA_NAMES)
         parser = mock_parser_deps(parser)
         tensors = parser.parse_observation(valid_prediction_input)
 
-        assert "camera_params" in tensors, (
-            "AlpasimStreamParser should emit camera_params in output dict."
+        assert "camera_params" not in tensors, (
+            "camera_params should NOT be in output dict as AutoE2E.forward rejects it."
         )
-        assert tensors["camera_params"].shape == (1, 7, 3, 4)
-        assert tensors["camera_params"].dtype == torch.float32
+        assert "projection" in tensors
+        assert tensors["geometry_type"] == "pinhole"
+        assert parser.camera_params.shape == (1, 7, 3, 4)
+        assert parser.camera_params.dtype == torch.float32
 
 
 
@@ -519,6 +535,84 @@ class TestAlpasimDriverPlugin:
         assert result.trajectory_xy.dtype == np.float32
         assert result.headings.dtype == np.float32
 
+    def test_driver_predict_rejects_camera_params_in_model(
+        self, dummy_checkpoint: str, sample_rgb_images: Dict[str, Image.Image], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Verify that if camera_params ever leaks into model forward kwargs, a TypeError is raised."""
+        driver = AutoE2EDriver(model_checkpoint=dummy_checkpoint, allow_mock=True)
+        mock_parser_deps(driver.parser)
+
+        original_parse = driver.parser.parse_observation
+
+        def leaky_parse_observation(observation):
+            tensors = original_parse(observation)
+            tensors["camera_params"] = torch.zeros((1, 7, 3, 4))
+            return tensors
+
+        monkeypatch.setattr(driver.parser, "parse_observation", leaky_parse_observation)
+
+        pred_input = PredictionInput(
+            camera_images=sample_rgb_images,
+            speed=8.0,
+            acceleration=0.1,
+            command=1,
+            ego_pose_history=[
+                type("MockPoseAtTime", (), {"timestamp_us": 0, "pose": type("MockPose", (), {"quat": type("MockQuat", (), {"w":1.0, "x":0.0, "y":0.0, "z":0.0})(), "x":0.0, "y":0.0, "z":0.0})()})(),
+                type("MockPoseAtTime", (), {"timestamp_us": 1, "pose": type("MockPose", (), {"quat": type("MockQuat", (), {"w":1.0, "x":0.0, "y":0.0, "z":0.0})(), "x":0.0, "y":0.0, "z":0.0})()})(),
+            ],
+            inference_seed=0,
+        )
+
+        with pytest.raises(TypeError, match="AutoE2E.forward no longer accepts 'camera_params='"):
+            driver.predict(pred_input)
+
+    def test_from_config_wires_scene_id(self) -> None:
+        """Verify from_config correctly extracts scene_id and passes it to driver/parser."""
+        cfg = AutoE2EAlpaSimConfig(
+            checkpoint_path="MOCK",
+            scene_id="test-scene-1234",
+            allow_mock=True,
+        )
+        driver = AutoE2EDriver.from_config(cfg)
+        assert driver.allow_mock is True
+        assert len(driver.parser.camera_names) == len(driver.camera_ids)
+
+    def test_single_pose_in_ego_pose_history_populates_ego_pose(
+        self, dummy_checkpoint: str, sample_rgb_images: Dict[str, Image.Image]
+    ) -> None:
+        """Verify ego_pose is populated when ego_pose_history has only 1 pose."""
+        driver = AutoE2EDriver(model_checkpoint=dummy_checkpoint, allow_mock=True)
+        mock_parser_deps(driver.parser)
+
+        captured_obs = {}
+        def mock_parse(obs):
+            captured_obs.update(obs)
+            return {
+                "camera_tiles": torch.zeros((1, 7, 3, 256, 256)),
+            }
+
+        driver.parser.parse_observation = mock_parse
+        single_pose = type("MockPoseAtTime", (), {
+            "timestamp_us": 1000,
+            "pose": type("MockPose", (), {
+                "x": 12.0, "y": 34.0,
+                "quat": type("MockQuat", (), {"w": 1.0, "x": 0.0, "y": 0.0, "z": 0.0})(),
+            })(),
+        })()
+
+        pred_input = PredictionInput(
+            camera_images=sample_rgb_images,
+            speed=5.0,
+            acceleration=0.0,
+            command=1,
+            ego_pose_history=[single_pose],
+            inference_seed=0,
+        )
+        driver.predict(pred_input)
+        assert captured_obs["ego_pose"] == (12.0, 34.0, 0.0)
+        assert captured_obs["yaw_rate"] == 0.0
+        assert captured_obs["curvature"] == 0.0
+
     def test_driver_plugin_strict_mock_disallowed(self) -> None:
         """Verify that initializing with allow_mock=False fails fast when using mock dependencies."""
         with pytest.raises(FileNotFoundError, match="not found"):
@@ -546,7 +640,8 @@ class TestAlpasimDriverPlugin:
         
         tensors = parser.parse_observation(obs)
         assert tensors["camera_tiles"].shape == (1, 2, 3, 256, 256)
-        assert tensors["camera_params"].shape == (1, 2, 3, 4)
+        assert "camera_params" not in tensors
+        assert parser.camera_params.shape == (1, 2, 3, 4)
         
         # Test driver fallback init with custom cameras
         driver = AutoE2EDriver(model_checkpoint="MOCK", allow_mock=True, camera_ids=custom_cameras)
@@ -601,7 +696,6 @@ class TestAlpasimDriverPlugin:
             # Return dummy tensors to prevent failure
             return {
                 "camera_tiles": torch.zeros((1, 7, 3, 256, 256)),
-                "camera_params": torch.zeros((1, 7, 3, 4)),
             }
         
         monkeypatch.setattr(driver.parser, "parse_observation", mock_parse_observation)

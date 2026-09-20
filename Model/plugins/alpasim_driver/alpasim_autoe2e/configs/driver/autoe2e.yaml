@@ -13,6 +13,7 @@ driver:
     allow_mock: false
     allow_untrained_model: false
     device: "cuda"
+    scene_id: null
     rewards:
       w_gt_dev: 1.0
       w_offroad: 0.5

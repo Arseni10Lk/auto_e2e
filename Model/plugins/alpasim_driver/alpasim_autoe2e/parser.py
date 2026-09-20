@@ -48,6 +48,11 @@ class AlpasimStreamParser:
 
         if scene_id:
             kitscenes_root = os.environ.get("KITSCENES_ROOT")
+            if not kitscenes_root:
+                local_kit = Path.cwd() / ".KITdata"
+                if local_kit.exists():
+                    kitscenes_root = str(local_kit)
+
             if kitscenes_root:
                 scene_path = Path(kitscenes_root) / "data" / "val" / scene_id
                 if not scene_path.exists():
@@ -172,7 +177,6 @@ class AlpasimStreamParser:
             "route_mask": route_mask,
             "map_valid": map_valid,
             "route_valid": route_valid,
-            "camera_params": self.camera_params,
             "projection": self.projection,
             "geometry_type": "pinhole",
         }

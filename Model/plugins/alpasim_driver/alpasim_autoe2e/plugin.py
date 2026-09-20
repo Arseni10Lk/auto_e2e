@@ -102,14 +102,33 @@ class AutoE2EDriver(BaseTrajectoryModel):
         context_length: int | None = None,
         output_frequency_hz: int = 10,
     ) -> "AutoE2EDriver":
-        checkpoint_path = model_cfg.checkpoint_path if model_cfg is not None else "MOCK"
+        checkpoint_path = "MOCK"
+        allow_mock = False
+        allow_untrained_model = False
+        scene_id = None
+
+        if model_cfg is not None:
+            if isinstance(model_cfg, dict):
+                checkpoint_path = model_cfg.get("checkpoint_path", checkpoint_path)
+                scene_id = model_cfg.get("scene_id")
+                allow_mock = model_cfg.get("allow_mock", False)
+                allow_untrained_model = model_cfg.get("allow_untrained_model", False)
+            else:
+                checkpoint_path = getattr(model_cfg, "checkpoint_path", checkpoint_path)
+                scene_id = getattr(model_cfg, "scene_id", None)
+                allow_mock = getattr(model_cfg, "allow_mock", False)
+                allow_untrained_model = getattr(model_cfg, "allow_untrained_model", False)
+
         driver = cls(
             model_checkpoint=checkpoint_path,
-            allow_mock=checkpoint_path == "MOCK" or not checkpoint_path,
-            allow_untrained_model=checkpoint_path == "UNTRAINED",
+            allow_mock=allow_mock or checkpoint_path == "MOCK" or not checkpoint_path,
+            allow_untrained_model=allow_untrained_model or checkpoint_path == "UNTRAINED",
             camera_ids=camera_ids,
+            scene_id=scene_id,
         )
         driver.device = device
+        if driver.model is not None:
+            driver.model.to(device)
         return driver
 
     @property
@@ -146,21 +165,21 @@ class AutoE2EDriver(BaseTrajectoryModel):
         curvature = 0.0
         ego_pose = None
         ego_pose_history = input_data.ego_pose_history
-        if ego_pose_history and len(ego_pose_history) >= 2:
-            prev = ego_pose_history[-2]
+        if ego_pose_history and len(ego_pose_history) >= 1:
             curr = ego_pose_history[-1]
-            dt = (curr.timestamp_us - prev.timestamp_us) / 1_000_000.0
-
             curr_yaw = _extract_yaw(curr.pose.quat)
             ego_pose = (curr.pose.x, curr.pose.y, curr_yaw)
 
-            if dt > 0:
-                prev_yaw = _extract_yaw(prev.pose.quat)
-                diff = math.atan2(
-                    math.sin(curr_yaw - prev_yaw), math.cos(curr_yaw - prev_yaw)
-                )
-                yaw_rate = diff / dt
-                curvature = yaw_rate / max(speed, 0.1)
+            if len(ego_pose_history) >= 2:
+                prev = ego_pose_history[-2]
+                dt = (curr.timestamp_us - prev.timestamp_us) / 1_000_000.0
+                if dt > 0:
+                    prev_yaw = _extract_yaw(prev.pose.quat)
+                    diff = math.atan2(
+                        math.sin(curr_yaw - prev_yaw), math.cos(curr_yaw - prev_yaw)
+                    )
+                    yaw_rate = diff / dt
+                    curvature = yaw_rate / max(speed, 0.1)
 
         observation = {
             "cameras": cameras_dict,
