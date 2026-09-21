@@ -24,7 +24,6 @@ driver:
   inference:
     use_cameras:
       - camera_base_front_center
-      - camera_ring_front
       - camera_ring_front_left
       - camera_ring_front_right
       - camera_ring_rear
@@ -74,11 +73,6 @@ runtime:
         frame_interval_us: 100_000
         shutter_duration_us: 30_000
       - logical_id: ${driver.inference.use_cameras[5]}
-        height: 320
-        width: 512
-        frame_interval_us: 100_000
-        shutter_duration_us: 30_000
-      - logical_id: ${driver.inference.use_cameras[6]}
         height: 320
         width: 512
         frame_interval_us: 100_000

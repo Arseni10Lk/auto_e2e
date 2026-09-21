@@ -10,7 +10,7 @@ from __future__ import annotations
 import io
 import sys
 from pathlib import Path
-from typing import Dict, List
+from typing import Any, Dict, List
 
 import numpy as np
 import pytest
@@ -59,16 +59,30 @@ class MockAutoE2EModel(torch.nn.Module):
 
 torch.serialization.add_safe_globals([MockAutoE2EModel])
 
-@pytest.fixture
-def dummy_checkpoint(tmp_path) -> str:
-    ckpt_path = tmp_path / "dummy_random.ckpt"
-    torch.save(MockAutoE2EModel(), ckpt_path)
+@pytest.fixture(scope="module")
+def dummy_checkpoint(tmp_path_factory) -> str:
+    from model_components.auto_e2e import AutoE2E
+
+    ckpt_dir = tmp_path_factory.mktemp("ckpt")
+    ckpt_path = ckpt_dir / "dummy_random.ckpt"
+    model = AutoE2E(num_views=6, map_context_channels=3, is_pretrained=False)
+    torch.save(
+        {
+            "config": {
+                "num_views": 6,
+                "map_context_channels": 3,
+                "is_pretrained": False,
+            },
+            "model_state_dict": model.state_dict(),
+        },
+        ckpt_path,
+    )
     return str(ckpt_path)
 
 @pytest.fixture
 def sample_rgb_images() -> Dict[str, Image.Image]:
 
-    """Generate 7 synthetic PIL images for KitScenes camera topology.
+    """Generate 6 synthetic PIL images for KitScenes camera topology.
 
     Returns a mapping from KitScenes camera names to 256x256 RGB images.
     """
@@ -81,7 +95,7 @@ def sample_rgb_images() -> Dict[str, Image.Image]:
 
 @pytest.fixture
 def sample_numpy_frames() -> Dict[str, np.ndarray]:
-    """Generate 7 synthetic uint8 numpy arrays for KitScenes camera topology.
+    """Generate 6 synthetic uint8 numpy arrays for KitScenes camera topology.
 
     Returns a mapping from KitScenes camera names to ``(256, 256, 3)`` arrays.
     """
@@ -94,7 +108,7 @@ def sample_numpy_frames() -> Dict[str, np.ndarray]:
 
 @pytest.fixture
 def sample_jpeg_bytes(sample_rgb_images: Dict[str, Image.Image]) -> Dict[str, bytes]:
-    """Generate 7 synthetic JPEG byte blobs for KitScenes camera topology.
+    """Generate 6 synthetic JPEG byte blobs for KitScenes camera topology.
 
     Returns a mapping from KitScenes camera names to JPEG bytes.
     """
@@ -169,7 +183,7 @@ class TestAlpasimStreamParserFixturesAndBasicShape:
         """Verify tensor shapes produced by ``parse_observation``.
 
         Expected shapes:
-          - ``camera_tiles``: ``[1, 7, 3, 256, 256]``
+          - ``camera_tiles``: ``[1, 6, 3, 256, 256]``
           - ``egomotion_history``: ``[1, 256]``
           - ``visual_history``: ``[1, 896]``
           - ``map_context``: ``[1, 3, 256, 256]``
@@ -181,7 +195,7 @@ class TestAlpasimStreamParserFixturesAndBasicShape:
         parser = mock_parser_deps(parser)
         tensors = parser.parse_observation(valid_prediction_input)
 
-        assert tensors["camera_tiles"].shape == (1, 7, 3, 256, 256)
+        assert tensors["camera_tiles"].shape == (1, 6, 3, 256, 256)
         assert tensors["egomotion_history"].shape == (1, 256)
         assert tensors["visual_history"].shape == (1, _VISUAL_HISTORY_DIM)
         assert tensors["map_context"].shape == (1, 3, 256, 256)
@@ -228,9 +242,9 @@ class TestAlpasimStreamParserFixturesAndBasicShape:
             {"cameras": sample_jpeg_bytes, "speed": 5.0, "acceleration": 0.0, "command": 0, "ego_pose": (0.0, 0.0, 0.0)}
         )["camera_tiles"]
 
-        assert t1.shape == (1, 7, 3, 256, 256)
-        assert t2.shape == (1, 7, 3, 256, 256)
-        assert t3.shape == (1, 7, 3, 256, 256)
+        assert t1.shape == (1, 6, 3, 256, 256)
+        assert t2.shape == (1, 6, 3, 256, 256)
+        assert t3.shape == (1, 6, 3, 256, 256)
 
     def test_route_mask_rendering(self, sample_rgb_images: Dict[str, Image.Image]) -> None:
         """Verify the route mask logic interacts correctly with the rasterizer."""
@@ -356,14 +370,13 @@ class TestOfflineKitScenesParity:
     def test_camera_topology_parity(self) -> None:
         """Verify the AlpaSim stream parser topology matches the KIT offline topology.
         
-        This parity check ensures that the names and order of the 7 camera streams
+        This parity check ensures that the names and order of the 6 camera streams
         expected by the runtime parser perfectly match the dataset training pipeline.
         """
         # Hardcoded contract representing the offline training dataset topology
         # to avoid CI dependency issues with the 'kitscenes' package.
         EXPECTED_KITSCENES_TOPOLOGY = [
             "camera_base_front_center",
-            "camera_ring_front",
             "camera_ring_front_left",
             "camera_ring_front_right",
             "camera_ring_rear",
@@ -376,7 +389,7 @@ class TestOfflineKitScenesParity:
             f"Parser:  {PARSER_CAMERA_NAMES}\n"
             f"Offline: {EXPECTED_KITSCENES_TOPOLOGY}"
         )
-        assert len(PARSER_CAMERA_NAMES) == 7, "AutoE2E expects exactly 7 cameras."
+        assert len(PARSER_CAMERA_NAMES) == 6, "AutoE2E expects exactly 6 cameras."
 
 
 
@@ -438,7 +451,7 @@ class TestEdgeCasesAndDiscrepancies:
             "ego_pose": (0.0, 0.0, 0.0),
         }
         tensors = parser.parse_observation(input_data)  # type: ignore[arg-type]
-        assert tensors["camera_tiles"].shape == (1, 7, 3, 256, 256)
+        assert tensors["camera_tiles"].shape == (1, 6, 3, 256, 256)
 
     def test_config_camera_names_match_parser(
         self, sample_rgb_images: Dict[str, Image.Image]
@@ -488,7 +501,7 @@ class TestEdgeCasesAndDiscrepancies:
         )
         assert "projection" in tensors
         assert tensors["geometry_type"] == "pinhole"
-        assert parser.camera_params.shape == (1, 7, 3, 4)
+        assert parser.camera_params.shape == (1, 6, 3, 4)
         assert parser.camera_params.dtype == torch.float32
 
 
@@ -502,6 +515,34 @@ class TestAlpasimDriverPlugin:
         driver = AutoE2EDriver(model_checkpoint=dummy_checkpoint, allow_mock=True)
         assert isinstance(driver.parser, AlpasimStreamParser)
         assert isinstance(driver.device, torch.device)
+
+    def test_checkpoint_architecture_reconstruction(self, tmp_path: Path) -> None:
+        """Verify AutoE2EDriver reconstructs AutoE2E architecture from checkpoint['config']."""
+        from model_components.auto_e2e import AutoE2E
+
+        custom_config: dict[str, Any] = {
+            "num_views": 6,
+            "embed_dim": 128,
+            "map_context_channels": 7,
+            "is_pretrained": False,
+        }
+        model = AutoE2E(**custom_config)
+        ckpt_path = tmp_path / "custom_config.ckpt"
+        torch.save(
+            {
+                "config": custom_config,
+                "model_state_dict": model.state_dict(),
+            },
+            ckpt_path,
+        )
+
+        driver = AutoE2EDriver(model_checkpoint=str(ckpt_path), allow_mock=False)
+        assert driver.model is not None
+        assert driver.model.Reactive_E2E.map_context_channels == 7
+        assert (
+            driver.model.Reactive_E2E.FusedFeaturePooling.reduce_channels.weight.shape[1]
+            == 128
+        )
 
     def test_driver_plugin_predict_happy_path(
         self, sample_rgb_images: Dict[str, Image.Image],
@@ -548,7 +589,7 @@ class TestAlpasimDriverPlugin:
 
         def leaky_parse_observation(observation):
             tensors = original_parse(observation)
-            tensors["camera_params"] = torch.zeros((1, 7, 3, 4))
+            tensors["camera_params"] = torch.zeros((1, 6, 3, 4))
             return tensors
 
         monkeypatch.setattr(driver.parser, "parse_observation", leaky_parse_observation)
@@ -565,7 +606,7 @@ class TestAlpasimDriverPlugin:
             inference_seed=0,
         )
 
-        with pytest.raises(TypeError, match="AutoE2E.forward no longer accepts 'camera_params='"):
+        with pytest.raises(TypeError, match=r"AutoE2E\.forward.*camera_params"):
             driver.predict(pred_input)
 
     def test_from_config_wires_scene_id(self) -> None:
@@ -580,17 +621,18 @@ class TestAlpasimDriverPlugin:
         assert len(driver.parser.camera_names) == len(driver.camera_ids)
 
     def test_single_pose_in_ego_pose_history_populates_ego_pose(
-        self, dummy_checkpoint: str, sample_rgb_images: Dict[str, Image.Image]
+        self, dummy_checkpoint: str, sample_rgb_images: Dict[str, Image.Image], monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Verify ego_pose is populated when ego_pose_history has only 1 pose."""
         driver = AutoE2EDriver(model_checkpoint=dummy_checkpoint, allow_mock=True)
         mock_parser_deps(driver.parser)
+        monkeypatch.setattr(driver, "model", lambda **kwargs: torch.zeros((1, 64, 2)))
 
         captured_obs = {}
         def mock_parse(obs):
             captured_obs.update(obs)
             return {
-                "camera_tiles": torch.zeros((1, 7, 3, 256, 256)),
+                "camera_tiles": torch.zeros((1, 6, 3, 256, 256)),
             }
 
         driver.parser.parse_observation = mock_parse
@@ -690,6 +732,7 @@ class TestAlpasimDriverPlugin:
         curr_pose = MockPoseAtTime(timestamp_us=2000000, pose=MockPose(quat=curr_quat))
 
         driver = AutoE2EDriver(model_checkpoint=dummy_checkpoint, allow_mock=True)
+        monkeypatch.setattr(driver, "model", lambda **kwargs: torch.zeros((1, 64, 2)))
 
         captured_input = {}
         def mock_parse_observation(input_dict):
@@ -697,7 +740,7 @@ class TestAlpasimDriverPlugin:
             captured_input = input_dict
             # Return dummy tensors to prevent failure
             return {
-                "camera_tiles": torch.zeros((1, 7, 3, 256, 256)),
+                "camera_tiles": torch.zeros((1, 6, 3, 256, 256)),
             }
         
         monkeypatch.setattr(driver.parser, "parse_observation", mock_parse_observation)

@@ -1,4 +1,5 @@
 from typing import Any, List
+import inspect
 import math
 from pathlib import Path
 
@@ -70,16 +71,15 @@ class AutoE2EDriver(BaseTrajectoryModel):
 
         if model_checkpoint and Path(model_checkpoint).exists():
             checkpoint = torch.load(model_checkpoint, map_location=self.device)
-            if hasattr(checkpoint, "forward"):
-                self.model = checkpoint
-            else:
-                from model_components.auto_e2e import AutoE2E
+            from model_components.auto_e2e import AutoE2E
 
-                self.model = AutoE2E(
-                    num_views=len(self._camera_ids), is_pretrained=False
-                ).to(self.device)
-                self.model.load_state_dict(checkpoint["model_state_dict"])
+            config = dict(checkpoint["config"])
+            valid = set(inspect.signature(AutoE2E.__init__).parameters) - {"self"}
+            kwargs = {k: v for k, v in config.items() if k in valid}
+            kwargs["is_pretrained"] = False
 
+            self.model = AutoE2E(**kwargs).to(self.device)
+            self.model.load_state_dict(checkpoint["model_state_dict"])
             self.model.eval()
         elif self.allow_untrained_model:
             from model_components.auto_e2e import AutoE2E

@@ -22,13 +22,22 @@ import io  # noqa: E402
 from model_components.auto_e2e import AutoE2E  # noqa: E402
 
 def create_model_checkpoint(ckpt_path: str) -> None:
-    model = AutoE2E(num_views=7, is_pretrained=False)
-    torch.save(model, ckpt_path)
+    model = AutoE2E(num_views=6, map_context_channels=14, is_pretrained=False)
+    torch.save(
+        {
+            "config": {
+                "num_views": 6,
+                "map_context_channels": 14,
+                "is_pretrained": False,
+            },
+            "model_state_dict": model.state_dict(),
+        },
+        ckpt_path,
+    )
 
 def generate_mock_prediction_input():
     camera_names = [
         "camera_base_front_center",
-        "camera_ring_front",
         "camera_ring_front_left",
         "camera_ring_front_right",
         "camera_ring_rear",

@@ -15,7 +15,6 @@ _DATASET_DIR = Path(__file__).resolve().parent / "configs" / "dataset"
 
 DEFAULT_CAMERA_NAMES: List[str] = [
     "camera_base_front_center",
-    "camera_ring_front",
     "camera_ring_front_left",
     "camera_ring_front_right",
     "camera_ring_rear",
@@ -97,7 +96,7 @@ class AutoE2EAlpaSimConfig:
     """Number of output waypoint steps along the planning horizon."""
 
     camera_names: List[str] = field(default_factory=lambda: list(DEFAULT_CAMERA_NAMES))
-    """List of 7 camera names matching KitScenes topology."""
+    """List of 6 camera names matching KitScenes model input contract."""
 
     scene_id: str | None = None
     """KITScenes scene ID (e.g., 'c34c778f-...') to load offline map and trajectory masks natively."""
