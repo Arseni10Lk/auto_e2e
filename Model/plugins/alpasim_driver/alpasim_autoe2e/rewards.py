@@ -1,6 +1,6 @@
 from typing import Any
-import numpy as np
 
+import numpy as np
 from shapely.geometry import Point, Polygon
 from shapely.strtree import STRtree
 

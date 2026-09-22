@@ -1,3 +1,3 @@
-from .plugin import AutoE2EDriver, AutoE2EAlpaSimModel
+from .plugin import AutoE2EAlpaSimModel, AutoE2EDriver
 
-__all__ = ["AutoE2EDriver", "AutoE2EAlpaSimModel"]
+__all__ = ["AutoE2EAlpaSimModel", "AutoE2EDriver"]

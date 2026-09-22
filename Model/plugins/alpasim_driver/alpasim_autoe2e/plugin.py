@@ -1,7 +1,7 @@
-from typing import Any, List
 import inspect
 import math
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import torch
@@ -13,6 +13,8 @@ from alpasim_driver.models.base import (
 
 from .config import DEFAULT_CAMERA_NAMES
 from .parser import AlpasimStreamParser
+
+_DEFAULT_DEVICE = torch.device("cpu")
 
 
 def _extract_yaw(quat: Any) -> float:
@@ -53,7 +55,7 @@ class AutoE2EDriver(BaseTrajectoryModel):
         model_checkpoint: str = "dummy_random.ckpt",
         allow_mock: bool = False,
         allow_untrained_model: bool = False,
-        camera_ids: List[str] | None = None,
+        camera_ids: list[str] | None = None,
         scene_id: str | None = None,
     ) -> None:
         super().__init__()
@@ -97,8 +99,8 @@ class AutoE2EDriver(BaseTrajectoryModel):
     def from_config(
         cls,
         model_cfg: Any = None,
-        device: torch.device = torch.device("cpu"),
-        camera_ids: List[str] | None = None,
+        device: torch.device = _DEFAULT_DEVICE,
+        camera_ids: list[str] | None = None,
         context_length: int | None = None,
         output_frequency_hz: int = 10,
     ) -> "AutoE2EDriver":
@@ -117,12 +119,15 @@ class AutoE2EDriver(BaseTrajectoryModel):
                 checkpoint_path = getattr(model_cfg, "checkpoint_path", checkpoint_path)
                 scene_id = getattr(model_cfg, "scene_id", None)
                 allow_mock = getattr(model_cfg, "allow_mock", False)
-                allow_untrained_model = getattr(model_cfg, "allow_untrained_model", False)
+                allow_untrained_model = getattr(
+                    model_cfg, "allow_untrained_model", False
+                )
 
         driver = cls(
             model_checkpoint=checkpoint_path,
             allow_mock=allow_mock or checkpoint_path == "MOCK" or not checkpoint_path,
-            allow_untrained_model=allow_untrained_model or checkpoint_path == "UNTRAINED",
+            allow_untrained_model=allow_untrained_model
+            or checkpoint_path == "UNTRAINED",
             camera_ids=camera_ids,
             scene_id=scene_id,
         )
@@ -132,7 +137,7 @@ class AutoE2EDriver(BaseTrajectoryModel):
         return driver
 
     @property
-    def camera_ids(self) -> List[str]:
+    def camera_ids(self) -> list[str]:
         return self._camera_ids
 
     @property
@@ -145,7 +150,7 @@ class AutoE2EDriver(BaseTrajectoryModel):
 
     def _encode_command(self, command: Any) -> None:
         """AutoE2E predicts trajectories end-to-end without discrete driving commands."""
-        return None
+        return
 
     def predict(self, input_data: PredictionInput) -> ModelPrediction:
         """Process real-time PredictionInput to ModelPrediction.

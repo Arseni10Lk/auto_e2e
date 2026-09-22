@@ -32,7 +32,8 @@ from alpasim_autoe2e.plugin import (  # noqa: E402
 from alpasim_autoe2e.parser import (  # noqa: E402
     AlpasimStreamParser,
 )
-PARSER_CAMERA_NAMES = AutoE2EAlpaSimConfig(checkpoint_path='dummy.ckpt').camera_names
+
+PARSER_CAMERA_NAMES = AutoE2EAlpaSimConfig(checkpoint_path="dummy.ckpt").camera_names
 
 from data_parsing.pre_extracted import (  # noqa: E402
     _VISUAL_HISTORY_DIM,
@@ -57,7 +58,9 @@ class MockAutoE2EModel(torch.nn.Module):
                 )
         return torch.zeros((1, 64, 2))
 
+
 torch.serialization.add_safe_globals([MockAutoE2EModel])
+
 
 @pytest.fixture(scope="module")
 def dummy_checkpoint(tmp_path_factory) -> str:
@@ -79,9 +82,9 @@ def dummy_checkpoint(tmp_path_factory) -> str:
     )
     return str(ckpt_path)
 
+
 @pytest.fixture
 def sample_rgb_images() -> Dict[str, Image.Image]:
-
     """Generate 6 synthetic PIL images for KitScenes camera topology.
 
     Returns a mapping from KitScenes camera names to 256x256 RGB images.
@@ -152,20 +155,21 @@ def stream_sequence_10hz(
                 "speed": speed,
                 "acceleration": acceleration,
                 "command": 1,
-        "ego_pose": (0.0, 0.0, 0.0),
+                "ego_pose": (0.0, 0.0, 0.0),
             }
         )
     return sequence
-
 
 
 def mock_parser_deps(parser, navigation_map=None, scene_path=None):
     class MockRaster:
         route_mask = np.zeros((2, 256, 256), dtype=np.float32)
         route_valid = True
+
     class MockRasterizer:
         def render(self, nav_map, route, live_pose):
             return MockRaster()
+
     parser.rasterizer = MockRasterizer()
     parser.route = True
     if navigation_map is not None:
@@ -173,6 +177,7 @@ def mock_parser_deps(parser, navigation_map=None, scene_path=None):
     if scene_path is not None:
         parser.scene_path = scene_path
     return parser
+
 
 class TestAlpasimStreamParserFixturesAndBasicShape:
     """Verify basic shape, dtype, and input decoding of AlpasimStreamParser."""
@@ -233,26 +238,52 @@ class TestAlpasimStreamParserFixturesAndBasicShape:
         parser = mock_parser_deps(parser)
 
         t1 = parser.parse_observation(
-            {"cameras": sample_rgb_images, "speed": 5.0, "acceleration": 0.0, "command": 0, "ego_pose": (0.0, 0.0, 0.0)}
+            {
+                "cameras": sample_rgb_images,
+                "speed": 5.0,
+                "acceleration": 0.0,
+                "command": 0,
+                "ego_pose": (0.0, 0.0, 0.0),
+            }
         )["camera_tiles"]
         t2 = parser.parse_observation(
-            {"cameras": sample_numpy_frames, "speed": 5.0, "acceleration": 0.0, "command": 0, "ego_pose": (0.0, 0.0, 0.0)}
+            {
+                "cameras": sample_numpy_frames,
+                "speed": 5.0,
+                "acceleration": 0.0,
+                "command": 0,
+                "ego_pose": (0.0, 0.0, 0.0),
+            }
         )["camera_tiles"]
         t3 = parser.parse_observation(
-            {"cameras": sample_jpeg_bytes, "speed": 5.0, "acceleration": 0.0, "command": 0, "ego_pose": (0.0, 0.0, 0.0)}
+            {
+                "cameras": sample_jpeg_bytes,
+                "speed": 5.0,
+                "acceleration": 0.0,
+                "command": 0,
+                "ego_pose": (0.0, 0.0, 0.0),
+            }
         )["camera_tiles"]
 
         assert t1.shape == (1, 6, 3, 256, 256)
         assert t2.shape == (1, 6, 3, 256, 256)
         assert t3.shape == (1, 6, 3, 256, 256)
 
-    def test_route_mask_rendering(self, sample_rgb_images: Dict[str, Image.Image]) -> None:
+    def test_route_mask_rendering(
+        self, sample_rgb_images: Dict[str, Image.Image]
+    ) -> None:
         """Verify the route mask logic interacts correctly with the rasterizer."""
         parser = AlpasimStreamParser(camera_names=PARSER_CAMERA_NAMES)
         parser = mock_parser_deps(parser)
-        
+
         tensors = parser.parse_observation(
-            {"cameras": sample_rgb_images, "speed": 0.0, "acceleration": 0.0, "command": 0, "ego_pose": (0.0, 0.0, 0.0)}
+            {
+                "cameras": sample_rgb_images,
+                "speed": 0.0,
+                "acceleration": 0.0,
+                "command": 0,
+                "ego_pose": (0.0, 0.0, 0.0),
+            }
         )
         mask = tensors["route_mask"][0, 0]
         assert mask.shape == (256, 256)
@@ -369,7 +400,7 @@ class TestOfflineKitScenesParity:
 
     def test_camera_topology_parity(self) -> None:
         """Verify the AlpaSim stream parser topology matches the KIT offline topology.
-        
+
         This parity check ensures that the names and order of the 6 camera streams
         expected by the runtime parser perfectly match the dataset training pipeline.
         """
@@ -383,14 +414,13 @@ class TestOfflineKitScenesParity:
             "camera_ring_rear_left",
             "camera_ring_rear_right",
         ]
-        
+
         assert PARSER_CAMERA_NAMES == EXPECTED_KITSCENES_TOPOLOGY, (
             f"Runtime parser camera topology MUST match the offline training topology.\n"
             f"Parser:  {PARSER_CAMERA_NAMES}\n"
             f"Offline: {EXPECTED_KITSCENES_TOPOLOGY}"
         )
         assert len(PARSER_CAMERA_NAMES) == 6, "AutoE2E expects exactly 6 cameras."
-
 
 
 class TestEdgeCasesAndDiscrepancies:
@@ -410,9 +440,16 @@ class TestEdgeCasesAndDiscrepancies:
         del partial_cams[missing_cam]
 
         import pytest
+
         with pytest.raises(ValueError, match=f"Missing camera frame for {missing_cam}"):
             parser.parse_observation(
-                {"cameras": partial_cams, "speed": 10.0, "acceleration": 0.0, "command": 1, "ego_pose": (0.0, 0.0, 0.0)}
+                {
+                    "cameras": partial_cams,
+                    "speed": 10.0,
+                    "acceleration": 0.0,
+                    "command": 1,
+                    "ego_pose": (0.0, 0.0, 0.0),
+                }
             )
 
     def test_edge_case_out_of_range_ego_values(
@@ -460,7 +497,7 @@ class TestEdgeCasesAndDiscrepancies:
 
         Passing inputs keyed by config camera names should successfully populate frames.
         """
-        config = AutoE2EAlpaSimConfig(checkpoint_path='dummy_random.ckpt')
+        config = AutoE2EAlpaSimConfig(checkpoint_path="dummy_random.ckpt")
         config_cams = config.camera_names  # ['cam_front', 'cam_front_left', ...]
 
         assert list(config_cams) == list(PARSER_CAMERA_NAMES), (
@@ -475,7 +512,13 @@ class TestEdgeCasesAndDiscrepancies:
         parser = AlpasimStreamParser(camera_names=PARSER_CAMERA_NAMES)
         parser = mock_parser_deps(parser)
         tensors = parser.parse_observation(
-            {"cameras": cams_with_config_keys, "speed": 10.0, "acceleration": 0.0, "command": 1, "ego_pose": (0.0, 0.0, 0.0)}
+            {
+                "cameras": cams_with_config_keys,
+                "speed": 10.0,
+                "acceleration": 0.0,
+                "command": 1,
+                "ego_pose": (0.0, 0.0, 0.0),
+            }
         )
 
         # Frames should not be empty since the camera names match
@@ -503,8 +546,6 @@ class TestEdgeCasesAndDiscrepancies:
         assert tensors["geometry_type"] == "pinhole"
         assert parser.camera_params.shape == (1, 6, 3, 4)
         assert parser.camera_params.dtype == torch.float32
-
-
 
 
 class TestAlpasimDriverPlugin:
@@ -540,13 +581,14 @@ class TestAlpasimDriverPlugin:
         assert driver.model is not None
         assert driver.model.Reactive_E2E.map_context_channels == 7
         assert (
-            driver.model.Reactive_E2E.FusedFeaturePooling.reduce_channels.weight.shape[1]
+            driver.model.Reactive_E2E.FusedFeaturePooling.reduce_channels.weight.shape[
+                1
+            ]
             == 128
         )
 
     def test_driver_plugin_predict_happy_path(
-        self, sample_rgb_images: Dict[str, Image.Image],
-        dummy_checkpoint: str
+        self, sample_rgb_images: Dict[str, Image.Image], dummy_checkpoint: str
     ) -> None:
         """Verify AutoE2EDriver.predict accepts PluginPredictionInput and returns ModelPrediction.
 
@@ -562,8 +604,48 @@ class TestAlpasimDriverPlugin:
             acceleration=0.1,
             command=1,
             ego_pose_history=[
-                type("MockPoseAtTime", (), {"timestamp_us": 0, "pose": type("MockPose", (), {"quat": type("MockQuat", (), {"w":1.0, "x":0.0, "y":0.0, "z":0.0})(), "x":0.0, "y":0.0, "z":0.0})()})(),
-                type("MockPoseAtTime", (), {"timestamp_us": 1, "pose": type("MockPose", (), {"quat": type("MockQuat", (), {"w":1.0, "x":0.0, "y":0.0, "z":0.0})(), "x":0.0, "y":0.0, "z":0.0})()})(),
+                type(
+                    "MockPoseAtTime",
+                    (),
+                    {
+                        "timestamp_us": 0,
+                        "pose": type(
+                            "MockPose",
+                            (),
+                            {
+                                "quat": type(
+                                    "MockQuat",
+                                    (),
+                                    {"w": 1.0, "x": 0.0, "y": 0.0, "z": 0.0},
+                                )(),
+                                "x": 0.0,
+                                "y": 0.0,
+                                "z": 0.0,
+                            },
+                        )(),
+                    },
+                )(),
+                type(
+                    "MockPoseAtTime",
+                    (),
+                    {
+                        "timestamp_us": 1,
+                        "pose": type(
+                            "MockPose",
+                            (),
+                            {
+                                "quat": type(
+                                    "MockQuat",
+                                    (),
+                                    {"w": 1.0, "x": 0.0, "y": 0.0, "z": 0.0},
+                                )(),
+                                "x": 0.0,
+                                "y": 0.0,
+                                "z": 0.0,
+                            },
+                        )(),
+                    },
+                )(),
             ],
             inference_seed=0,
         )
@@ -579,7 +661,10 @@ class TestAlpasimDriverPlugin:
         assert result.headings.dtype == np.float32
 
     def test_driver_predict_rejects_camera_params_in_model(
-        self, dummy_checkpoint: str, sample_rgb_images: Dict[str, Image.Image], monkeypatch: pytest.MonkeyPatch
+        self,
+        dummy_checkpoint: str,
+        sample_rgb_images: Dict[str, Image.Image],
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """Verify that if camera_params ever leaks into model forward kwargs, a TypeError is raised."""
         driver = AutoE2EDriver(model_checkpoint=dummy_checkpoint, allow_mock=True)
@@ -600,8 +685,48 @@ class TestAlpasimDriverPlugin:
             acceleration=0.1,
             command=1,
             ego_pose_history=[
-                type("MockPoseAtTime", (), {"timestamp_us": 0, "pose": type("MockPose", (), {"quat": type("MockQuat", (), {"w":1.0, "x":0.0, "y":0.0, "z":0.0})(), "x":0.0, "y":0.0, "z":0.0})()})(),
-                type("MockPoseAtTime", (), {"timestamp_us": 1, "pose": type("MockPose", (), {"quat": type("MockQuat", (), {"w":1.0, "x":0.0, "y":0.0, "z":0.0})(), "x":0.0, "y":0.0, "z":0.0})()})(),
+                type(
+                    "MockPoseAtTime",
+                    (),
+                    {
+                        "timestamp_us": 0,
+                        "pose": type(
+                            "MockPose",
+                            (),
+                            {
+                                "quat": type(
+                                    "MockQuat",
+                                    (),
+                                    {"w": 1.0, "x": 0.0, "y": 0.0, "z": 0.0},
+                                )(),
+                                "x": 0.0,
+                                "y": 0.0,
+                                "z": 0.0,
+                            },
+                        )(),
+                    },
+                )(),
+                type(
+                    "MockPoseAtTime",
+                    (),
+                    {
+                        "timestamp_us": 1,
+                        "pose": type(
+                            "MockPose",
+                            (),
+                            {
+                                "quat": type(
+                                    "MockQuat",
+                                    (),
+                                    {"w": 1.0, "x": 0.0, "y": 0.0, "z": 0.0},
+                                )(),
+                                "x": 0.0,
+                                "y": 0.0,
+                                "z": 0.0,
+                            },
+                        )(),
+                    },
+                )(),
             ],
             inference_seed=0,
         )
@@ -621,7 +746,10 @@ class TestAlpasimDriverPlugin:
         assert len(driver.parser.camera_names) == len(driver.camera_ids)
 
     def test_single_pose_in_ego_pose_history_populates_ego_pose(
-        self, dummy_checkpoint: str, sample_rgb_images: Dict[str, Image.Image], monkeypatch: pytest.MonkeyPatch
+        self,
+        dummy_checkpoint: str,
+        sample_rgb_images: Dict[str, Image.Image],
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """Verify ego_pose is populated when ego_pose_history has only 1 pose."""
         driver = AutoE2EDriver(model_checkpoint=dummy_checkpoint, allow_mock=True)
@@ -629,6 +757,7 @@ class TestAlpasimDriverPlugin:
         monkeypatch.setattr(driver, "model", lambda **kwargs: torch.zeros((1, 64, 2)))
 
         captured_obs = {}
+
         def mock_parse(obs):
             captured_obs.update(obs)
             return {
@@ -636,13 +765,24 @@ class TestAlpasimDriverPlugin:
             }
 
         driver.parser.parse_observation = mock_parse
-        single_pose = type("MockPoseAtTime", (), {
-            "timestamp_us": 1000,
-            "pose": type("MockPose", (), {
-                "x": 12.0, "y": 34.0,
-                "quat": type("MockQuat", (), {"w": 1.0, "x": 0.0, "y": 0.0, "z": 0.0})(),
-            })(),
-        })()
+        single_pose = type(
+            "MockPoseAtTime",
+            (),
+            {
+                "timestamp_us": 1000,
+                "pose": type(
+                    "MockPose",
+                    (),
+                    {
+                        "x": 12.0,
+                        "y": 34.0,
+                        "quat": type(
+                            "MockQuat", (), {"w": 1.0, "x": 0.0, "y": 0.0, "z": 0.0}
+                        )(),
+                    },
+                )(),
+            },
+        )()
 
         pred_input = PredictionInput(
             camera_images=sample_rgb_images,
@@ -667,12 +807,13 @@ class TestAlpasimDriverPlugin:
         custom_cameras = ["camera_ring_front_left", "camera_ring_front_right"]
         parser = AlpasimStreamParser(camera_names=custom_cameras)
         parser = mock_parser_deps(parser)
-        
+
         # Build fake observation
         from PIL import Image
+
         fake_images = {
             "camera_ring_front_left": Image.new("RGB", (256, 256), (255, 0, 0)),
-            "camera_ring_front_right": Image.new("RGB", (256, 256), (0, 255, 0))
+            "camera_ring_front_right": Image.new("RGB", (256, 256), (0, 255, 0)),
         }
         obs = {
             "cameras": fake_images,
@@ -681,25 +822,74 @@ class TestAlpasimDriverPlugin:
             "command": 1,
             "ego_pose": (0.0, 0.0, 0.0),
         }
-        
+
         tensors = parser.parse_observation(obs)
         assert tensors["camera_tiles"].shape == (1, 2, 3, 256, 256)
         assert "camera_params" not in tensors
         assert parser.camera_params.shape == (1, 2, 3, 4)
-        
+
         # Test driver fallback init with custom cameras
-        driver = AutoE2EDriver(model_checkpoint="MOCK", allow_mock=True, camera_ids=custom_cameras)
+        driver = AutoE2EDriver(
+            model_checkpoint="MOCK", allow_mock=True, camera_ids=custom_cameras
+        )
         mock_parser_deps(driver.parser)
         assert len(driver.camera_ids) == 2
         # Mock prediction output
         fake_history = [
-                type("MockPoseAtTime", (), {"timestamp_us": 0, "pose": type("MockPose", (), {"quat": type("MockQuat", (), {"w":1.0, "x":0.0, "y":0.0, "z":0.0})(), "x":0.0, "y":0.0, "z":0.0})()})(),
-                type("MockPoseAtTime", (), {"timestamp_us": 1, "pose": type("MockPose", (), {"quat": type("MockQuat", (), {"w":1.0, "x":0.0, "y":0.0, "z":0.0})(), "x":0.0, "y":0.0, "z":0.0})()})(),
+            type(
+                "MockPoseAtTime",
+                (),
+                {
+                    "timestamp_us": 0,
+                    "pose": type(
+                        "MockPose",
+                        (),
+                        {
+                            "quat": type(
+                                "MockQuat", (), {"w": 1.0, "x": 0.0, "y": 0.0, "z": 0.0}
+                            )(),
+                            "x": 0.0,
+                            "y": 0.0,
+                            "z": 0.0,
+                        },
+                    )(),
+                },
+            )(),
+            type(
+                "MockPoseAtTime",
+                (),
+                {
+                    "timestamp_us": 1,
+                    "pose": type(
+                        "MockPose",
+                        (),
+                        {
+                            "quat": type(
+                                "MockQuat", (), {"w": 1.0, "x": 0.0, "y": 0.0, "z": 0.0}
+                            )(),
+                            "x": 0.0,
+                            "y": 0.0,
+                            "z": 0.0,
+                        },
+                    )(),
+                },
+            )(),
         ]
-        pred = driver.predict(PredictionInput(camera_images=fake_images, speed=5.0, acceleration=1.0, command=1, ego_pose_history=fake_history, inference_seed=0))
+        pred = driver.predict(
+            PredictionInput(
+                camera_images=fake_images,
+                speed=5.0,
+                acceleration=1.0,
+                command=1,
+                ego_pose_history=fake_history,
+                inference_seed=0,
+            )
+        )
         assert pred.trajectory_xy.shape == (64, 2)
 
-    def test_dynamic_yaw_rate_and_curvature(self, dummy_checkpoint: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_dynamic_yaw_rate_and_curvature(
+        self, dummy_checkpoint: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """Verify yaw_rate and curvature are computed dynamically from ego_pose_history."""
         import math
         from dataclasses import dataclass
@@ -735,6 +925,7 @@ class TestAlpasimDriverPlugin:
         monkeypatch.setattr(driver, "model", lambda **kwargs: torch.zeros((1, 64, 2)))
 
         captured_input = {}
+
         def mock_parse_observation(input_dict):
             nonlocal captured_input
             captured_input = input_dict
@@ -742,7 +933,7 @@ class TestAlpasimDriverPlugin:
             return {
                 "camera_tiles": torch.zeros((1, 6, 3, 256, 256)),
             }
-        
+
         monkeypatch.setattr(driver.parser, "parse_observation", mock_parse_observation)
 
         pred_input = PredictionInput(
@@ -767,7 +958,10 @@ class TestDynamicBevMapGeneration:
     """Verify dynamic BEV map tile rasterization and error handling in AlpasimStreamParser."""
 
     def test_dynamic_bev_map_tile_generation_success(
-        self, valid_prediction_input: PredictionInput, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+        self,
+        valid_prediction_input: PredictionInput,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
     ) -> None:
         """Verify generate_bev_map_tile is dynamically invoked when scene_path and navigation_map exist."""
         parser = AlpasimStreamParser(camera_names=PARSER_CAMERA_NAMES)
@@ -808,7 +1002,10 @@ class TestDynamicBevMapGeneration:
         )
 
     def test_dynamic_bev_map_returns_none_raises_runtime_error(
-        self, valid_prediction_input: PredictionInput, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+        self,
+        valid_prediction_input: PredictionInput,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
     ) -> None:
         """Verify fail-loud RuntimeError is raised when generate_bev_map_tile returns None."""
         parser = AlpasimStreamParser(camera_names=PARSER_CAMERA_NAMES)
@@ -901,6 +1098,7 @@ class TestDynamicBevMapGeneration:
         monkeypatch.setenv("KITSCENES_ROOT", str(kitscenes_root))
 
         mock_nav_called = False
+
         class MockNavResult:
             navigation_map = object()
             route = object()
@@ -919,7 +1117,9 @@ class TestDynamicBevMapGeneration:
             mock_build_scene_navigation,
         )
 
-        parser = AlpasimStreamParser(camera_names=PARSER_CAMERA_NAMES, scene_id="scene_val_001")
+        parser = AlpasimStreamParser(
+            camera_names=PARSER_CAMERA_NAMES, scene_id="scene_val_001"
+        )
         assert parser.scene_path == val_scene
         assert mock_nav_called is True
         assert parser.navigation_map is not None
@@ -950,8 +1150,48 @@ class TestDynamicBevMapGeneration:
             acceleration=0.1,
             command=1,
             ego_pose_history=[
-                type("MockPoseAtTime", (), {"timestamp_us": 0, "pose": type("MockPose", (), {"quat": type("MockQuat", (), {"w":1.0, "x":0.0, "y":0.0, "z":0.0})(), "x":0.0, "y":0.0, "z":0.0})()})(),
-                type("MockPoseAtTime", (), {"timestamp_us": 1, "pose": type("MockPose", (), {"quat": type("MockQuat", (), {"w":1.0, "x":0.0, "y":0.0, "z":0.0})(), "x":0.0, "y":0.0, "z":0.0})()})(),
+                type(
+                    "MockPoseAtTime",
+                    (),
+                    {
+                        "timestamp_us": 0,
+                        "pose": type(
+                            "MockPose",
+                            (),
+                            {
+                                "quat": type(
+                                    "MockQuat",
+                                    (),
+                                    {"w": 1.0, "x": 0.0, "y": 0.0, "z": 0.0},
+                                )(),
+                                "x": 0.0,
+                                "y": 0.0,
+                                "z": 0.0,
+                            },
+                        )(),
+                    },
+                )(),
+                type(
+                    "MockPoseAtTime",
+                    (),
+                    {
+                        "timestamp_us": 1,
+                        "pose": type(
+                            "MockPose",
+                            (),
+                            {
+                                "quat": type(
+                                    "MockQuat",
+                                    (),
+                                    {"w": 1.0, "x": 0.0, "y": 0.0, "z": 0.0},
+                                )(),
+                                "x": 0.0,
+                                "y": 0.0,
+                                "z": 0.0,
+                            },
+                        )(),
+                    },
+                )(),
             ],
             inference_seed=0,
         )

@@ -1,18 +1,17 @@
 import io
 import os
-from pathlib import Path
 import time
-from typing import Any, Dict
-
-import numpy as np
-from PIL import Image
-import torch
+from pathlib import Path
+from typing import Any
 
 import data_parsing.kit_scenes.map as kit_map
 import data_parsing.kit_scenes.navigation as kit_nav
+import navigation.rasterizer as nav_rasterizer
+import numpy as np
+import torch
 from model_components.view_fusion import PinholeProjection
 from navigation.rasterizer import EgoPose
-import navigation.rasterizer as nav_rasterizer
+from PIL import Image
 
 from .config import get_image_transform, load_projection_matrices
 
@@ -95,7 +94,7 @@ class AlpasimStreamParser:
             img = img.resize((256, 256), resample=Image.Resampling.BILINEAR)
         return self.transform(img)
 
-    def parse_observation(self, observation: Dict[str, Any]) -> Dict[str, Any]:
+    def parse_observation(self, observation: dict[str, Any]) -> dict[str, Any]:
         """Convert a live observation dictionary into pipeline batch tensors.
 
         Returns:
