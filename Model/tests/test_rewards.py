@@ -426,6 +426,42 @@ class TestGroundTruthDeviationReward:
         # ADE = 2.9 / 5 = 0.58. No terminal penalty.
         assert reward == pytest.approx(-0.58, abs=1e-6)
 
+    def test_truncation_signal_on_boundary_violation(self):
+        """When max deviation exceeds threshold, truncated=True is returned."""
+        gt = np.zeros((5, 2), dtype=np.float32)
+        pred = np.zeros((5, 2), dtype=np.float32)
+        pred[-1, 1] = 3.5  # > 3.0m threshold
+
+        reward_fn = GroundTruthDeviationReward(
+            ade_weight=1.0,
+            fde_weight=0.0,
+            max_deviation_threshold=3.0,
+            terminal_penalty=10.0,
+        )
+        assert reward_fn.is_out_of_bounds(pred, gt) is True
+
+        reward, truncated = reward_fn.compute_with_truncation(pred, gt)
+        assert truncated is True
+        assert reward == pytest.approx(-10.7, abs=1e-6)
+
+    def test_truncation_signal_within_boundary(self):
+        """When max deviation is within threshold, truncated=False is returned."""
+        gt = np.zeros((5, 2), dtype=np.float32)
+        pred = np.zeros((5, 2), dtype=np.float32)
+        pred[-1, 1] = 2.9  # <= 3.0m
+
+        reward_fn = GroundTruthDeviationReward(
+            ade_weight=1.0,
+            fde_weight=0.0,
+            max_deviation_threshold=3.0,
+            terminal_penalty=10.0,
+        )
+        assert reward_fn.is_out_of_bounds(pred, gt) is False
+
+        reward, truncated = reward_fn.compute_with_truncation(pred, gt)
+        assert truncated is False
+        assert reward == pytest.approx(-0.58, abs=1e-6)
+
     def test_torch_tensor_and_numpy_parity(self):
         """Parity between PyTorch Tensors (with grad) and NumPy arrays."""
         gt_np = np.array([[1.0, 0.5], [2.0, 1.0], [3.0, 1.5]], dtype=np.float32)
@@ -625,3 +661,22 @@ class TestRewardManagerAndFramework:
         )
         expected_penalty = -(1.0 * np.sqrt(2) + 0.5 * np.sqrt(2))
         assert total == pytest.approx(3.0 * expected_penalty, abs=1e-5)
+
+    def test_reward_manager_truncation_signal(
+        self,
+        drivable_corridor_map: MockNavigationMap,
+    ):
+        """RewardManager.compute_with_truncation returns truncated=True on 3DGS boundary breach."""
+        gt = np.zeros((5, 2), dtype=np.float32)
+        pred = np.zeros((5, 2), dtype=np.float32)
+        pred[-1, 1] = 3.5
+
+        manager = RewardManager(w_gt_dev=1.0, w_offroad=0.0)
+        total_reward, truncated = manager.compute_with_truncation(
+            trajectory_xy=pred,
+            gt_trajectory=gt,
+            ego_pose=(0.0, 0.0, 0.0),
+            navigation_map=drivable_corridor_map,
+        )
+        assert truncated is True
+        assert total_reward == pytest.approx(-12.45, abs=1e-6)

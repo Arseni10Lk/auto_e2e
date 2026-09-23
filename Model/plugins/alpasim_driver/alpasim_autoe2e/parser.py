@@ -4,7 +4,6 @@ import time
 from pathlib import Path
 from typing import Any
 
-import data_parsing.kit_scenes.map as kit_map
 import data_parsing.kit_scenes.navigation as kit_nav
 import navigation.rasterizer as nav_rasterizer
 import numpy as np
@@ -120,7 +119,7 @@ class AlpasimStreamParser:
             self._egomotion_buffer.reshape(1, -1).copy()
         )
 
-        map_context = torch.zeros(1, 3, 256, 256, dtype=torch.float32)
+        map_context = torch.zeros(1, 14, 256, 256, dtype=torch.float32)
         route_mask = torch.zeros(1, 2, 256, 256, dtype=torch.float32)
         route_valid_flag = False
 
@@ -140,25 +139,7 @@ class AlpasimStreamParser:
             )
             raster = self.rasterizer.render(self.navigation_map, self.route, live_pose)
             route_mask = torch.from_numpy(raster.route_mask).float().unsqueeze(0)
-            if self.navigation_map and self.scene_path:
-                bev_map = kit_map.generate_bev_map_tile(
-                    scene_path=self.scene_path,
-                    ego_x=x,
-                    ego_y=y,
-                    ego_yaw=yaw,
-                    canvas_size=256,
-                )
-                if bev_map is not None:
-                    map_context = (
-                        torch.from_numpy(bev_map.copy())
-                        .permute(2, 0, 1)
-                        .float()
-                        .unsqueeze(0)
-                    )
-                else:
-                    raise RuntimeError(
-                        "generate_bev_map_tile failed and returned None. Ensure the scene map is valid and Lanelet2 is able to extract vectors."
-                    )
+            map_context = torch.from_numpy(raster.map_context).float().unsqueeze(0)
             route_valid_flag = raster.route_valid
         else:
             raise ImportError(

@@ -11,10 +11,12 @@ from alpasim_driver.models.base import (
     PredictionInput,
 )
 
+from evaluation.metrics import integrate_trajectory
+
 from .config import DEFAULT_CAMERA_NAMES
 from .parser import AlpasimStreamParser
 
-_DEFAULT_DEVICE = torch.device("cpu")
+_DEFAULT_DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
 def _extract_yaw(quat: Any) -> float:
@@ -29,22 +31,14 @@ def _unroll_unicycle_controls(
     controls: np.ndarray, v_init: float, dt: float = 0.1
 ) -> tuple[np.ndarray, np.ndarray]:
     """Integrate (acceleration, curvature) controls into (x, y) waypoints and headings."""
-    points = np.zeros_like(controls, dtype=np.float32)
-    headings = np.zeros(len(controls), dtype=np.float32)
-    x, y, theta = 0.0, 0.0, 0.0
-    v = v_init
-
-    for i in range(len(controls)):
-        a, k = controls[i, 0], controls[i, 1]
-        x += v * math.cos(theta) * dt
-        y += v * math.sin(theta) * dt
-        theta += v * k * dt
-        v += a * dt
-        points[i, 0] = x
-        points[i, 1] = y
-        headings[i] = theta
-
-    return points, headings
+    points, headings = integrate_trajectory(
+        accel=controls[:, 0],
+        curvature=controls[:, 1],
+        v0=v_init,
+        dt=dt,
+        return_headings=True,
+    )
+    return points.astype(np.float32), headings.astype(np.float32)
 
 
 class AutoE2EDriver(BaseTrajectoryModel):
@@ -68,7 +62,7 @@ class AutoE2EDriver(BaseTrajectoryModel):
             camera_names=self._camera_ids,
             scene_id=scene_id,
         )
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.device = _DEFAULT_DEVICE
         self.model = None
 
         if model_checkpoint and Path(model_checkpoint).exists():
@@ -152,24 +146,24 @@ class AutoE2EDriver(BaseTrajectoryModel):
         """AutoE2E predicts trajectories end-to-end without discrete driving commands."""
         return
 
-    def predict(self, input_data: PredictionInput) -> ModelPrediction:
+    def predict(self, prediction_input: PredictionInput) -> ModelPrediction:
         """Process real-time PredictionInput to ModelPrediction.
 
         Returns:
             ModelPrediction with trajectory_xy [64, 2] and headings [64].
         """
         cameras_dict = {}
-        for cam_name, val in input_data.camera_images.items():
+        for cam_name, val in prediction_input.camera_images.items():
             frame = val[-1] if isinstance(val, (list, tuple)) else val
             cameras_dict[cam_name] = getattr(frame, "image", frame)
 
-        speed = input_data.speed
-        acceleration = input_data.acceleration
+        speed = prediction_input.speed
+        acceleration = prediction_input.acceleration
 
         yaw_rate = 0.0
         curvature = 0.0
         ego_pose = None
-        ego_pose_history = input_data.ego_pose_history
+        ego_pose_history = prediction_input.ego_pose_history
         if ego_pose_history and len(ego_pose_history) >= 1:
             curr = ego_pose_history[-1]
             curr_yaw = _extract_yaw(curr.pose.quat)
@@ -195,12 +189,11 @@ class AutoE2EDriver(BaseTrajectoryModel):
             "ego_pose": ego_pose,
         }
 
-        parsed = self.parser.parse_observation(observation)
-        tensors = {
-            k: v.to(self.device) if hasattr(v, "to") else v for k, v in parsed.items()
-        }
-
         if self.model is not None:
+            parsed = self.parser.parse_observation(observation)
+            tensors = {
+                k: v.to(self.device) if hasattr(v, "to") else v for k, v in parsed.items()
+            }
             with torch.no_grad():
                 controls = self.model(**tensors, mode="inference")
                 points, headings = _unroll_unicycle_controls(

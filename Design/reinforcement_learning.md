@@ -41,7 +41,7 @@ The closed-loop reinforcement learning framework consists of three primary compo
 The **KITScenes Multimodal** dataset is the primary foundation for closed-loop world generation and RL training.
 
 **Justification:**
-- **Sensor Fidelity**: Provides 72.5 MPix per frame across 9 global-shutter cameras (6×7.1 MPix surround, 1×16.2 MPix long-range, 2×7.1 MPix stereo pair) to support high-fidelity rendering.
+- **Sensor Fidelity**: Provides 73.0 MPix per frame across 9 global-shutter cameras (6×7.1 MPix surround, 1×16.2 MPix long-range, 2×7.1 MPix stereo pair) to support high-fidelity rendering.
 - **Geographic Complexity**: Features irregular European road layouts (Karlsruhe, Frankfurt, Sindelfingen) to ensure robust policy training in non-grid environments.
 - **RL Viability**: Designed explicitly for end-to-end driving and novel view synthesis, supplying the dense trajectory and visual data required to simulate realistic closed-loop consequences.
 
@@ -89,14 +89,14 @@ The plugin registers itself dynamically via Python entry points (`alpasim.models
 **Key Components:**
 - **`AutoE2EDriver`**: The core implementation (subclassing AlpaSim's `BaseTrajectoryModel`). It consumes the simulator's `PredictionInput` and yields a `ModelPrediction` containing the generated trajectory and headings.
 - **`AutoE2EAlpaSimConfig`**: A dataclass managing checkpoint paths and model initialization parameters (e.g., `allow_untrained_model`).
-- **YAML Configuration**: Dynamic driver configs that formally register the 7-camera KIT topology with AlpaSim, overriding the default renderer camera setup to prevent `KeyError`s during closed-loop simulation.
+- **YAML Configuration**: Dynamic driver configs that formally register the 6-camera KIT topology with AlpaSim, overriding the default renderer camera setup to prevent `KeyError`s during closed-loop simulation.
 
 ### 5.2 Data Contract
 
 The plugin establishes a input/output contract for the AutoE2E model:
 
 **Input Observations (`PredictionInput`):**
-- **Visual Topology**: While the KITScenes dataset provides 9 cameras for comprehensive rendering and reconstruction, the AutoE2E model actively consumes a **7-camera subset** (the 1 long-range and 6 surround cameras). These are explicitly defined as: `camera_base_front_center`, `camera_ring_front`, `camera_ring_front_left`, `camera_ring_front_right`, `camera_ring_rear`, `camera_ring_rear_left`, `camera_ring_rear_right`.
+- **Visual Topology**: While the KITScenes dataset provides 9 cameras for comprehensive rendering and reconstruction, the AutoE2E model actively consumes a **6-camera subset** matching the offline dataset ingestion pipeline (omitting `camera_ring_front`). These are explicitly defined as: `camera_base_front_center`, `camera_ring_front_left`, `camera_ring_front_right`, `camera_ring_rear`, `camera_ring_rear_left`, `camera_ring_rear_right`.
 - **Telemetry**: Ego vehicle speed (*m/s*), acceleration (*m/s²*), yaw rate (*rad/s*), and trajectory curvature (*1/m*), alongside a `route_mask` natively rendered from the scene's dynamic `ego_pose`.
 
 **Output Predictions (`ModelPrediction`):**
@@ -105,7 +105,7 @@ The plugin establishes a input/output contract for the AutoE2E model:
 
 ## 6. Reward Design
 
-### 6.1 Phase 1 (Implemented): Ground-Truth Deviation & 3DGS Boundary Gating
+### 6.1 Phase 1 (Implemented as Library, Driver Runtime Wiring Pending): Ground-Truth Deviation & 3DGS Boundary Gating
 
 For initial Stage-3 closed-loop bring-up, the policy is evaluated against the recorded expert demonstration rather than complex multi-agent collision checks. This addresses two physical constraints:
 1. **Raw Sensor Stream Availability:** Real-world datasets (such as KITScenes) provide high-resolution camera streams and Lanelet2 HD maps, but do not provide ground-truth 3D bounding box annotations for all dynamic agents at runtime.
@@ -122,6 +122,8 @@ R = w_gt_dev * R_track + R_bound + w_offroad * R_offroad
 - **3DGS Degradation & Boundary Violation ($R_{\text{bound}}$):** If maximum trajectory displacement or ego pose deviates beyond $d_{\text{max}} = 3.0\,\text{m}$, a terminal penalty is applied and the episode is truncated early:
   $$\text{is\_out\_of\_bounds} = \max_t \|\hat{\mathbf{p}}_t - \mathbf{p}^*_t\|_2 > 3.0\,\text{m}$$
 - **Drivable Area Penalty ($R_{\text{offroad}}$):** Evaluated against Lanelet2 drivable polygons using spatial indexing (`STRtree`).
+
+*(Note on Stationary-Ego Progress Incentive):* In Phase 1, the stationary-ego failure mode cannot occur under $R_{\text{track}}$. If the ego vehicle stops or under-progresses, the recorded ground-truth trajectory continues moving forward. Consequently, $\text{ADE}$ and $\text{FDE}$ grow steadily until maximum displacement exceeds the 3.0 m 3DGS boundary threshold, triggering the terminal penalty ($R_{\text{bound}} = -10.0$) and early episode truncation. The progress incentive is therefore carried by construction in Phase 1 rather than requiring a dedicated progress reward term as formulated in Phase 2 (§6.2.2).
 
 ### 6.2 Phase 2 (Future Work): Multi-Objective Reward Formulation
 
@@ -141,11 +143,11 @@ R = w_safe * R_safety          # collision / off-road / TTC violation (hard, han
 
 A major risk in neural reward models is reward hacking, where the policy emits a reason that *matches* its action to farm rewards, even if that reason did not actually cause the action (a "plausible narrative", as warned in **LaViPlan** [4]).
 
-To prevent this and enforce true reasoning-action consistency (**Alpamayo-R1** [5]), the `R_reason` term is multiplied by `g`, a **faithfulness gate**. `g` measures the causal coupling (via intervention delta). The reasoning-shaped reward contributes *only* when the reasoning is verifiably causal for the policy's trajectory. If `g` reads zero (as it does in early checkpoints), the term contributes nothing, falling back smoothly to the safety/progress baselines.
+To prevent this and enforce true reasoning-action consistency (**Alpamayo-R1** [5]), the `R_reason` term is multiplied by `g`, a **faithfulness gate**. `g` measures the causal coupling (via intervention delta). The reasoning-shaped reward contributes *only* when the reasoning is verifiably causal for the policy's trajectory. If `g` reads zero (indicating decoupled reasoning under forced-coupling calibration and structural redundancy checks), the term contributes nothing, falling back smoothly to the safety/progress baselines.
 
 #### 6.2.2 Progress as a Safety Metric
 
-An imitation-only policy evaluated in AlpaSim demonstrated that safety/compliance terms alone score a stationary vehicle as near-perfect. Thus, `R_progress` is treated as a first-class safety metric; under-progress (e.g., driving 44 km/h slower than traffic) guarantees rear-end collisions.
+An imitation-only policy evaluated in AlpaSim demonstrated that safety/compliance terms alone score a stationary vehicle as near-perfect. Thus, in the Phase 2 multi-objective formulation, `R_progress` is treated as a first-class safety metric; under-progress (e.g., achieving only 8.48 m vs 73.77 m route progress, with `collision_rear` 1.00) guarantees rear-end collisions from surrounding traffic. (Note that in Phase 1, stationary-ego stalling is already prevented by construction via $R_{\text{track}}$ and the 3DGS boundary gating as detailed in §6.1).
 
 ## 7. Training Infrastructure (Future Work)
 
@@ -161,7 +163,7 @@ The `SimAdapter` will provide a unified interface for policy rollouts, abstracti
 
 Following the established patterns for planners and temporal memory, reward terms will be implemented as decoupled plugins managed by a `RewardRegistry` (`handcrafted`, `irl`, `reasoning_shaped`, `faithfulness_gated`).
 
-Each plugin conforms to a strict interface (`term(state, action, rollout, info) -> Tensor`) and must declare the inputs it consumes. This allows mechanical verification of the non-redundancy constraint outlined in Section 5.
+Each plugin conforms to a strict interface (`term(state, action, rollout, info) -> Tensor`) and must declare the inputs it consumes.
 
 ## 8. Evaluation Strategy (Future Work)
 

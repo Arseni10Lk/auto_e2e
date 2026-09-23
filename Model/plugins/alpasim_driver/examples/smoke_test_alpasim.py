@@ -16,17 +16,10 @@ for path in [_REPO_ROOT, _MODEL_DIR, _PLUGINS_DIR, _DRIVER_DIR]:
     if path not in sys.path:
         sys.path.insert(0, path)
 
-from alpasim_driver.plugin import AutoE2EDriver, PredictionInput  # noqa: E402
-from model_components.auto_e2e import AutoE2E  # noqa: E402
-
-from Tools.trajectory_visualization.artifacts import ShardSample  # noqa: E402
-from Tools.trajectory_visualization.rendering import (  # noqa: E402
-    render_frame,
-    trajectory_extent,
-)
-
 
 def create_model_checkpoint(ckpt_path: str) -> None:
+    from model_components.auto_e2e import AutoE2E
+
     model = AutoE2E(num_views=6, map_context_channels=14, is_pretrained=False)
     torch.save(
         {
@@ -42,6 +35,8 @@ def create_model_checkpoint(ckpt_path: str) -> None:
 
 
 def generate_mock_prediction_input():
+    from alpasim_driver.models.base import DriveCommand, PredictionInput
+
     camera_names = [
         "camera_base_front_center",
         "camera_ring_front_left",
@@ -54,18 +49,60 @@ def generate_mock_prediction_input():
     for name in camera_names:
         camera_images[name] = Image.new("RGB", (256, 256), color="gray")
 
+    class MockQuat:
+        w: float = 1.0
+        x: float = 0.0
+        y: float = 0.0
+        z: float = 0.0
+
+    class MockPose:
+        quat = MockQuat()
+        x: float = 0.0
+        y: float = 0.0
+        z: float = 0.0
+
+    class MockPoseAtTime:
+        timestamp_us: int = 0
+        pose = MockPose()
+
     return PredictionInput(
-        camera_images=camera_images, speed=10.0, acceleration=0.5, command=1
+        camera_images=camera_images,
+        command=DriveCommand.STRAIGHT,
+        speed=10.0,
+        acceleration=0.5,
+        ego_pose_history=[MockPoseAtTime()],
+        inference_seed=0,
     )
 
 
 def main():
+    from alpasim_autoe2e.plugin import AutoE2EDriver
+    from Tools.trajectory_visualization.artifacts import ShardSample
+    from Tools.trajectory_visualization.rendering import (
+        render_frame,
+        trajectory_extent,
+    )
+
     ckpt_path = "dummy_random.ckpt"
     create_model_checkpoint(ckpt_path)
     print(f"Created model checkpoint at {ckpt_path}")
 
     driver = AutoE2EDriver(model_checkpoint=ckpt_path, allow_mock=False)
     print("Initialized AutoE2EDriver")
+
+    if driver.parser.rasterizer is None:
+
+        class MockRaster:
+            route_mask = np.zeros((2, 256, 256), dtype=np.float32)
+            map_context = np.zeros((14, 256, 256), dtype=np.float32)
+            route_valid = True
+
+        class MockRasterizer:
+            def render(self, nav_map, route, live_pose):
+                return MockRaster()
+
+        driver.parser.rasterizer = MockRasterizer()
+        driver.parser.route = True
 
     mock_input = generate_mock_prediction_input()
     prediction = driver.predict(mock_input)

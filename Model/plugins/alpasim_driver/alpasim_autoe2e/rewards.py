@@ -25,13 +25,28 @@ class GroundTruthDeviationReward:
         self.max_deviation_threshold = max_deviation_threshold
         self.terminal_penalty = terminal_penalty
 
-    def compute(
+    def is_out_of_bounds(
         self,
         trajectory_xy: np.ndarray,
         gt_trajectory: np.ndarray,
-    ) -> float:
+    ) -> bool:
+        """Check whether max displacement between prediction and ground truth exceeds 3DGS threshold."""
         if len(trajectory_xy) == 0 or len(gt_trajectory) == 0:
-            return 0.0
+            return False
+        n = min(len(trajectory_xy), len(gt_trajectory))
+        pred_coords = trajectory_xy[:n, :2]
+        gt_coords = gt_trajectory[:n, :2]
+        distances = np.linalg.norm(pred_coords - gt_coords, axis=-1)
+        return bool(np.max(distances) > self.max_deviation_threshold)
+
+    def compute_with_truncation(
+        self,
+        trajectory_xy: np.ndarray,
+        gt_trajectory: np.ndarray,
+    ) -> tuple[float, bool]:
+        """Compute deviation reward and return episode truncation flag for 3DGS boundary violation."""
+        if len(trajectory_xy) == 0 or len(gt_trajectory) == 0:
+            return 0.0, False
 
         n = min(len(trajectory_xy), len(gt_trajectory))
         pred_coords = trajectory_xy[:n, :2]
@@ -40,16 +55,23 @@ class GroundTruthDeviationReward:
         diffs = pred_coords - gt_coords
         distances = np.linalg.norm(diffs, axis=-1)
 
-        ade = np.mean(distances)
-        fde = distances[-1]
-        max_dev = np.max(distances)
+        ade = float(np.mean(distances))
+        fde = float(distances[-1])
+        max_dev = float(np.max(distances))
 
         tracking_penalty = -(self.ade_weight * ade + self.fde_weight * fde)
-        bound_penalty = (
-            -self.terminal_penalty if max_dev > self.max_deviation_threshold else 0.0
-        )
+        truncated = max_dev > self.max_deviation_threshold
+        bound_penalty = -self.terminal_penalty if truncated else 0.0
 
-        return tracking_penalty + bound_penalty
+        return tracking_penalty + bound_penalty, truncated
+
+    def compute(
+        self,
+        trajectory_xy: np.ndarray,
+        gt_trajectory: np.ndarray,
+    ) -> float:
+        reward, _ = self.compute_with_truncation(trajectory_xy, gt_trajectory)
+        return reward
 
 
 class OffRoadReward:
@@ -131,6 +153,21 @@ class RewardManager:
         if self.gt_reward is None and self.offroad_reward is None:
             raise ValueError("At least one reward should be passed")
 
+    def compute_with_truncation(
+        self,
+        trajectory_xy: np.ndarray,
+        gt_trajectory: np.ndarray,
+        ego_pose: tuple[float, float, float],
+        navigation_map: Any,
+    ) -> tuple[float, bool]:
+        """Compute total reward and return 3DGS boundary truncation flag."""
+        r_gt, truncated = self.gt_reward.compute_with_truncation(
+            trajectory_xy, gt_trajectory
+        )
+        r_offroad = self.offroad_reward.compute(ego_pose, trajectory_xy, navigation_map)
+        total_reward = self.w_gt_dev * r_gt + self.w_offroad * r_offroad
+        return total_reward, truncated
+
     def compute(
         self,
         trajectory_xy: np.ndarray,
@@ -138,9 +175,10 @@ class RewardManager:
         ego_pose: tuple[float, float, float],
         navigation_map: Any,
     ) -> float:
-        r_gt = self.gt_reward.compute(trajectory_xy, gt_trajectory)
-        r_offroad = self.offroad_reward.compute(ego_pose, trajectory_xy, navigation_map)
-        return self.w_gt_dev * r_gt + self.w_offroad * r_offroad
+        total_reward, _ = self.compute_with_truncation(
+            trajectory_xy, gt_trajectory, ego_pose, navigation_map
+        )
+        return total_reward
 
 
 __all__ = [
