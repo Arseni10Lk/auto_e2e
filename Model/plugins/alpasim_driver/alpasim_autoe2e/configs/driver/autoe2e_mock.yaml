@@ -1,0 +1,9 @@
+# AutoE2E driver without a model: drives straight ahead at the current speed.
+# Select it with `driver=autoe2e_mock` to test the simulator plumbing.
+
+defaults:
+  - autoe2e
+  - _self_
+
+model:
+  checkpoint_path: "MOCK"
