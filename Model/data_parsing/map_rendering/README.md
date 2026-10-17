@@ -80,7 +80,7 @@ tensor = gps_to_tensor(
     # ego_lat / ego_lon default to the last GPS sample
     radius_m=800,
 )
-# tensor.shape == (3, H, W) — drop straight into the visual_tiles slot.
+# tensor.shape == (3, H, W), used as the map tile (not a camera view).
 ```
 
 ### Batch preprocessing

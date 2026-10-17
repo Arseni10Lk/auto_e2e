@@ -57,9 +57,7 @@ export function anchorFramesOf(samples: HasReasoningFrame[]): number[] {
 // `frame`, scanning anchors newest-first so a newer label always wins and an
 // out-of-scope (absent) or still-loading nearer anchor is skipped in favour of
 // an older present one — the carry-forward. It considers only anchors <= frame,
-// so a future anchor's label can never render on an earlier frame (this
-// structurally removes the "in-flight response for a prior frame renders on the
-// current one" class of bug the old effect guarded against by hand).
+// so a future anchor's label can never render on an earlier frame.
 export function selectCarryForwardLabel<Label>(
   anchorFrames: number[],
   frame: number,

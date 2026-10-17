@@ -1,17 +1,20 @@
-# Design: Dataset-Group-Sharded, Map-Task-Parallel Data Pipeline (#121)
+# Design: Dataset-Group-Sharded, Map-Task-Parallel Data Pipeline
 
-Status: SCOPE UPDATED (2026-07-15) — option-B fan-out remains locked; the active
-implementation and execution target is now KitScenes.
+Status: Implemented for KitScenes as `wf_create_dataset_sharded` in
+`Platform/pipelines/workflows.py` (option-B scene-partitioned `map_task` fan-out
+with a source-inventory preflight). `plan_fanout_partitions` also accepts L2D
+(training role, `train` split, pinned source revision only); NVIDIA fan-out
+raises `NotImplementedError` and stays on the single-dataset workflow.
 Scope: make the AutoE2E data pipeline (ingest → reasoning-label → pack → train →
 eval) scale to **all KitScenes train scenes** by fanning each data-prep stage out
 across many pods instead of one. Existing L2D and NVIDIA code and design notes
 remain in place, but no new L2D/NVIDIA implementation or full run is part of this
 milestone.
 
-### 2026-07-15 scope override
-This section supersedes the earlier L2D/NVIDIA execution scope elsewhere in the
-document:
-- **KitScenes is the only active dataset for #121.** Complete its parser contract,
+### Execution scope
+L2D/NVIDIA material elsewhere in this document is design background; the
+execution scope is:
+- **KitScenes is the only active dataset for this pipeline.** Complete its parser contract,
   wire it into the current Flyte workflow, validate scene fan-out, then run the
   full KitScenes train split.
 - **L2D is deferred because its full corpus is operationally too large for this
@@ -20,9 +23,8 @@ document:
   do not optimize or launch it now.
 - **NVIDIA PhysicalAI-AV is also deferred.** Preserve its current parser and
   workflow paths; do not remove or rewrite them while adding KitScenes.
-- PR #41 already provides `Model/data_parsing/kit_scenes/`, but the active
-  workflow does not reference it. Parser-to-pipeline contract completion is
-  therefore the first implementation gate, not a new parser from scratch.
+- The KitScenes parser in `Model/data_parsing/kit_scenes/` must satisfy the
+  pipeline-facing contract in §1.4 before fan-out.
 - The immutable source pins for reproducible development/smoke runs are
   `KIT-MRT/KITScenes-Multimodal@6fde0034446669e2ed7235e4c7fe323cd23d599d`
   (tag `v1.0.1`) and KitScenes SDK commit
@@ -32,7 +34,7 @@ document:
 - Data prep may fan out across CPU pods. Training remains serial on one GPU;
   a 3–4 day training run is acceptable and DDP is out of scope.
 
-### Decisions locked in review
+### Decisions
 1. **Distribute data prep, not training.** CPU/memory capacity may be increased
    for ingest/label/pack fan-out. `train_il` remains a single-GPU serial task.
 2. **Do NOT co-locate ingest+label+pack** (§3.5-1). Keep them as SEPARATE Flyte
@@ -61,9 +63,8 @@ document:
 ## 1. Problem statement
 
 ### 1.1 Symptom
-The L2D measurements below are the evidence that led to option B. They remain
-architecturally relevant, but L2D is no longer the corpus selected for this
-milestone.
+The L2D measurements below are the evidence that led to option B. L2D is not
+the corpus selected for this milestone.
 
 Scaling from 10 → 20 → 50 L2D episodes, every data-prep stage fails in turn with
 `OOMKilled (137)`, each at a different point:
@@ -92,7 +93,7 @@ with the *total* episode count:
 - `data_processing` (`workflows.py:286`) packs all samples in one pod, single
   tar writer in the parent (`:449–467`), WM workers capped at 6 by memory.
 
-### 1.3 Original hard blocker: positional `sample_id`
+### 1.3 Hard blocker: positional `sample_id`
 The intended fix was Flyte `map_task`/`@dynamic` fan-out over episode ranges, but
 the baseline was unsafe because the reasoning-label ↔ shard JOIN keyed on a
 *positional* id that only made sense within a single process that loaded the
@@ -111,13 +112,12 @@ exact same episode set:
 `sorted(self._episode_ranges.items())`). So `s00000000` in a pod that loaded
 episodes [0–9] is a *different physical frame* than in a pod that loaded [10–19].
 If two pods label/pack different ranges, the JOIN silently mis-attaches labels and
-every cache key collides. L2D/NVIDIA now use global IDs; KitScenes must implement
-the same invariant before its first fan-out.
+every cache key collides. L2D, NVIDIA, and KitScenes all use global IDs
+(§3.1).
 
-### 1.4 Current blocker: KitScenes parser/workflow contract
-PR #41 merged a standalone seven-camera + Lanelet2 parser, but the Flyte path
-still only knows L2D and NVIDIA. Before scene fan-out, `KitScenesDataset` must
-provide the same pipeline-facing contract used by label and pack:
+### 1.4 KitScenes parser/workflow contract
+Before scene fan-out, the six-camera + Lanelet2 `KitScenesDataset` must provide
+the same pipeline-facing contract used by label and pack:
 - partition-independent `sample_uid(idx)` and scene-level
   `split_group_uid(idx)`;
 - stable `frame_index`, raw camera-frame access, `get_front_clip(idx)`,
@@ -126,18 +126,15 @@ provide the same pipeline-facing contract used by label and pack:
   partition, without discovering or retaining unrelated scenes;
 - raw arrays/images for pack workers rather than only timm-transformed tensors.
 
-The current map heading also reads egomotion channel 2 as yaw, although that
-channel is yaw rate. The parser must retain absolute pose yaw separately and use
-it for map rasterization before the first smoke run.
+Egomotion channel 2 is yaw rate, not yaw. The parser retains absolute pose yaw
+separately and uses it for map rasterization.
 
 ---
 
 ## 2. Baseline architecture (historical, verified during design)
 
-The diagram below records the single-pod architecture that motivated #121. The
-current branch already adds `wf_create_dataset_sharded` for L2D, stage caching,
-and multi-partition train/eval. The remaining gap is that this sharded path still
-rejects every dataset except L2D and has no KitScenes ingest/label/pack branches.
+The diagram below records the single-pod architecture that motivated this
+design. Line references are to `workflows.py` at that time.
 
 ```
 wf_create_dataset(episodes, world_model, reasoning_teacher, prompt_version)   [workflows.py:1515]
@@ -207,7 +204,7 @@ Rationale:
 - So `sample_uid` for a given physical frame is identical whether that frame was
   processed in a full run or in a shard covering only its episode range.
 
-Call-site invariant (already implemented for L2D/NVIDIA):
+Call-site invariant:
 - `parallel_label` gets `sample_key` from `_DS.sample_uid(si)`.
 - `parallel_pack.pack_sample` returns the uid and the parent uses it as the tar
   member prefix instead of a positional `f"s{si:08d}"`.
@@ -218,7 +215,7 @@ Call-site invariant (already implemented for L2D/NVIDIA):
 - Every label/pack artifact uses this uid as its JOIN identity; partition position
   must never enter the key.
 
-**`sample_uid` is a formal identity contract, not a string format** (review pt 2).
+**`sample_uid` is a formal identity contract, not a string format.**
 Define a typed identity and derive the uid from it, so releases can't collide and
 malformed keys are caught at build time:
 
@@ -240,7 +237,7 @@ class SampleIdentity:
   revision in the sample's `meta.json` (not only encoded in the tar key) for
   traceability.
 
-**`split_group_uid` — the eval-split unit (review pt 1, the most important fix).**
+**`split_group_uid` — the eval-split unit.**
 A SEPARATE id at episode/clip/scene granularity, NOT the per-frame uid:
 ```python
 split_group_uid = f"l2d-e{episode_index:06d}"
@@ -258,7 +255,7 @@ per-`__key__` split in `pre_extracted.py:_split_bucket`; the loader must split o
 a `split_group_uid` carried in each sample's meta (add it to the packed
 `meta.json`), not on `__key__`.
 
-**Strict decimated JOIN (review pt 2).** Pack remains 10 Hz while Cosmos labels
+**Strict decimated JOIN.** Pack remains 10 Hz while Cosmos labels
 the deterministic 1 Hz subset. Require exact equality against that expected
 subset, not against every packed sample:
 ```python
@@ -281,9 +278,9 @@ masked out of the reasoning loss.
 Introduce a **dataset-group partition** as the unit of fan-out. For the active
 KitScenes path, a group is one scene UUID and the initial partition is exactly
 one scene. L2D ranges and NVIDIA clip lists remain supported representations but
-are not implementation targets in this milestone.
+are not fan-out targets.
 
-**Ingest materializes raw PER PARTITION (option B, chosen 2026-07-13).** Each
+**Ingest materializes raw PER PARTITION (option B).** Each
 partition's `data_ingest` fetches ONLY that partition's raw data from source and
 saves it as its OWN `FlyteDirectory`; the label and pack pods for that partition
 read that partition's raw dir. This keeps every stage's memory/disk proportional
@@ -324,19 +321,16 @@ rather than re-pulling from HF.
   from that raw dir (sorted), so the packer and labeler enumerate the same order
   (sample-index JOIN holds). This path is retained but deferred.
 
-**As-built Flyte gap (verified 2026-07-15).** The current
-`wf_create_dataset_sharded` is an `@dynamic` Python `for` loop. It creates one
-explicit `ingest -> label -> pack` chain per L2D partition; it does not call
-`map_task`, rejects non-L2D fan-out, defaults to `max_partitions=512`, and has no
-stage-level label concurrency limit. A 533-scene plan cannot pass the current
-guard, and raising only that guard would serialize roughly 1,602 task nodes into
-one dynamic graph. That is below the observed ~2,000-node Propeller/gRPC failure
-region but leaves too little event-size margin and could drive 60 label pods x 6
+**Why array nodes.** An `@dynamic` Python `for` loop that creates one explicit
+`ingest -> label -> pack` chain per partition would serialize roughly 1,602 task
+nodes into one dynamic graph for a 533-scene plan. That is below the observed
+~2,000-node Propeller/gRPC failure region but leaves too little event-size margin,
+and without a stage-level label concurrency limit it could drive 60 label pods x 6
 workers = 360 concurrent teacher calls.
 
-**Target Flyte structure.** Keep the existing task bodies, cache keys, retries,
-resources, `group_ids`, and per-partition artifacts, but replace the dynamic loop
-with three array nodes. `group_ids` is a `List[List[str]]` of singleton scene-UUID
+**Flyte structure.** The task bodies, cache keys, retries, resources,
+`group_ids`, and per-partition artifacts are shared with the direct path; the
+fan-out uses three array nodes. `group_ids` is a `List[List[str]]` of singleton scene-UUID
 lists, so the existing generic partition input remains usable:
 
 ```python
@@ -384,7 +378,7 @@ pods reuse this materialized raw (no HF re-hit).
 - Emits one partition-level `records.jsonl`. Cross-run reuse comes from the Flyte
   task cache keyed by immutable inputs and contract versions; no per-sample S3
   cache is reintroduced.
-- **Bounded global teacher concurrency (review pt 6).** Total in-flight calls =
+- **Bounded global teacher concurrency.** Total in-flight calls =
   `map_concurrency × label_workers_per_pod` must stay ≤ what the Cosmos endpoint
   (10 replicas) can serve without 429/tail-latency. Set BOTH:
   `map_task(generate_reasoning_labels_range, concurrency=C)` caps concurrent pods,
@@ -392,7 +386,7 @@ pods reuse this materialized raw (no HF re-hit).
   (`label_workers_per_pod=2`, `concurrency=5` → ≤10 in-flight ≈ 1/replica); tune
   from measured endpoint batching. NOT "#pods × 12 unbounded" (that = 120 calls on
   10 replicas → retry storm).
-- **Teacher retry (review pt 6):** retry only 429/5xx, honour `Retry-After`,
+- **Teacher retry:** retry only 429/5xx, honour `Retry-After`,
   exponential backoff + jitter, max attempts + max elapsed, fail fast on 4xx.
   A task retry deterministically regenerates its partition-level `records.jsonl`;
   there is no per-uid cache side effect. Currently `openai_compatible.py` has NO
@@ -405,7 +399,7 @@ pods reuse this materialized raw (no HF re-hit).
 - WM worker cap (6) stays per-pod but now bounds a small range, not the whole set.
 - Emits a per-partition shard `FlyteDirectory` + a `ShardPartitionManifest`.
 
-**Combine → a reducer that emits a `DatasetManifest` (review pt 7).** Instead of
+**Combine → a reducer that emits a `DatasetManifest`.** Instead of
 returning a bare `List[FlyteDirectory]` (which loses coverage/checksum/split
 stats), a final `validate_and_publish_manifest` reducer collects the per-partition
 manifests, validates them, and emits ONE `DatasetManifest`:
@@ -429,9 +423,9 @@ transport underneath.
 ### 3.3 Partitioning function
 `plan_partitions(snapshot, target_cost, max_partitions)` returns a deterministic
 `PartitionSpec` list. The active KitScenes policy is deliberately simple:
-`partition_size=1`, where the one group is one scene UUID. Set the KitScenes
-guard to at least `max_partitions=600`; the current L2D default of 512 rejects the
-533-scene available train set.
+`partition_size=1`, where the one group is one scene UUID. The KitScenes guard
+defaults to `max_partitions=600`; a limit of 512 would reject the 533-scene
+available train set.
 
 #### 3.3.1 Source-inventory gate
 
@@ -497,9 +491,8 @@ crosses the allocatable-memory boundary of a nominal 128-GiB instance. Restoring
 that profile for future L2D work requires an IaC-managed data-prep `NodeClass`
 and `NodePool`; it is not a prerequisite for the one-scene KITScenes run.
 
-The L2D-specific 17-batch launcher is not the KitScenes entry point. If the
-installed Flyte version cannot execute the mapped-array design, the fallback is
-two stable prep executions of 267 and 266 scenes, followed by one manifest
+If the installed Flyte version cannot execute the mapped-array design, the
+fallback is two stable prep executions of 267 and 266 scenes, followed by one manifest
 collection and one training run. Do not use a 512+21 split or change scene
 boundaries between retries, because stable partition inputs are required for
 cache reuse.
@@ -526,9 +519,9 @@ estimated_cost = n_frames*decode_cost + n_wm_windows*wm_cost + est_bytes*io_cost
   every partition below measured P95 memory, ephemeral-storage, and wall-time
   limits. It is an optimization after the one-scene run, not a prerequisite.
 
-### 3.4 Label cache: DROP the per-sample S3 cache (decided 2026-07-13)
+### 3.4 Label cache: no per-sample S3 cache
 The reasoning teacher was cached one-JSON-per-sample in
-`s3://…/reasoning_labels_cache/…/{sample_uid}.json` (#117). At full L2D
+`s3://…/reasoning_labels_cache/…/{sample_uid}.json`. At full L2D
 (~100k episodes × ~100 valid samples/ep) that is **~10M tiny objects** — exactly
 the small-file failure mode that blows up S3 request-rate on any copy/list and
 exhausts inodes on the train node (per the wids/Turing writeup: transfer is
@@ -556,7 +549,7 @@ option-B design never does (partitions are stable), so it is a non-cost.
 The old positional-keyed objects (`s{si:08d}.json`) and any per-sample uid
 objects already written are now dead; clean them up under §3.4b.
 
-### 3.4a Flyte caching + provenance (skip unchanged ranges) (review pt 2)
+### 3.4a Flyte caching + provenance (skip unchanged ranges)
 Stages are separate (decision 2) and fan out per range, so a re-run must NOT redo
 unchanged work. The current L2D tasks already enable Flyte caching; preserve it
 for KitScenes. A generic `cache_version="v1"` alone is insufficient: Flyte's
@@ -594,7 +587,7 @@ Caveat: `FlyteDirectory` inputs hash by URI, so upstream re-runs that produce a
 new raw dir URI will invalidate downstream cache — acceptable, and why ingest
 caching (stable raw URI per range) matters most.
 
-### 3.4b S3 cleanup — retention, not immediate delete (review pt 8)
+### 3.4b S3 cleanup — retention, not immediate delete
 This is the retained L2D cleanup design only. It is deferred and no legacy L2D
 object is changed by the KitScenes milestone.
 
@@ -620,7 +613,7 @@ holds if the CONTRACTS whose values enter the cache key are STABLE. This section
 is the single registry of every cache-invalidating knob; it exists so we do not
 accidentally churn a contract and silently re-run the whole corpus.
 
-Accepted re-runs (fine, per user): (i) extending the requested group set (a NEW
+Accepted re-runs: (i) extending the requested group set (a NEW
 partition is a new cache key — only the new ranges run; old ranges stay cached); (ii) an
 ingest cache miss cascading to its own pack (the raw URI changes, so that pack
 re-runs). We do NOT engineer around these.
@@ -662,10 +655,10 @@ confirm each is a single constant, and confirm no runtime/tuning knob is in any
 cached task's input signature. This is the concrete guard that the contract we
 are locking now stays locked.
 
-### 3.4d World-Model pack: dedup frames (decided 2026-07-13)
+### 3.4d World-Model pack: dedup frames
 The measurements and key examples below came from L2D. The same packed contract
-applies to KitScenes, with scene UUID replacing episode index and seven camera
-views replacing six. No `window_index.json` entry may reference another scene.
+applies to KitScenes, with scene UUID replacing episode index and the six KITScenes camera
+views replacing the L2D views. No `window_index.json` entry may reference another scene.
 
 **Problem (measured).** With reasoning labels present, `data_processing` forces
 `world_model=True`, and a WM sample packs 55 image JPEGs: 6 current cams + 1 map +
@@ -678,7 +671,7 @@ the decode location — is the storage+pack bottleneck.
 
 **Rejected: train-time seek / NVDEC.** Rebuilding the window by lerobot
 `delta_timestamps` seek at train time (or GPU NVDEC) removes the storage cost but
-reintroduces exactly what pre-extraction (#30) was built to avoid: the WM window
+reintroduces exactly what pre-extraction was built to avoid: the WM window
 is on the critical path for ALL THREE losses (it produces the planner+reasoning
 `visual_history` via `encode_history`, not just the JEPA target — auto_e2e.py:145-168),
 so every batch of every epoch re-pays ~48 multi-cam decodes. The per-worker ~300 MB
@@ -689,7 +682,7 @@ Also note the label stage decodes a DIFFERENT frame set (front cam × 5 horizons
 than train (6 cams × 8 window steps), so "reuse the label-time JPEGs at train
 time" does not apply — they are not even a superset.
 
-**Per-loss Hz (locked with the user):** the sample enumeration stays **10 Hz**
+**Per-loss Hz:** the sample enumeration stays **10 Hz**
 (one sample per source row) — the REACTIVE head needs the dense per-0.1 s
 trajectory targets, so we do NOT decimate pack/train samples. The WM window is
 **1 Hz** internally (stride-10 offsets), and dedup removes the resulting
@@ -733,7 +726,7 @@ reactive + JEPA train on all 10 Hz samples; reasoning trains on the 1 Hz labeled
 subset; teacher cost drops ~10×.
 
 **Boundary safety — no cross-episode/scene reference, INCLUDING the reactive
-history (locked requirement).** Every backward/forward reach must stay inside the
+history.** Every backward/forward reach must stay inside the
 sample's own episode:
 - egomotion history/future: `extract_egomotion` slices a window taken from
   `_get_vehicle_states_window(ep_start, ep_end)`, i.e. clamped to the episode.
@@ -760,9 +753,9 @@ non-None traj/jepa/reason; (iii) measured deduped shard size ≈ imitation basel
 (iv) the pool key namespace does not leak into the camera-key regex (`num_views`
 unchanged in the manifest); (v) `num_workers>0` still hides the gather+decode.
 
-### 3.5 Open design questions — RESOLVED in review
+### 3.5 Resolved design questions
 1. **Ingest↔pack coupling → SEPARATE tasks + PER-PARTITION raw materialization
-   (option B, chosen 2026-07-13).** Keep ingest/label/pack as distinct tasks
+   (option B).** Keep ingest/label/pack as distinct tasks
    (stage-level retry). Each partition's ingest fetches ONLY that partition's raw
    from source and saves it as the partition's `FlyteDirectory`; that partition's
    label + pack read it. Raw is pulled from HF/SDK ONCE per partition (not
@@ -790,7 +783,7 @@ unchanged in the manifest); (v) `num_workers>0` still hides the gather+decode.
 
 ### 3.6 KITScenes benchmark objective and split policy
 
-Producing a KITScenes E2E benchmark result is a first-class output of #121, not an
+Producing a KITScenes E2E benchmark result is a first-class output of this design, not an
 informal ADE/FDE check after training. The benchmark report must be reproducible
 from an immutable dataset revision, SDK revision, scene/window manifest, packed
 manifest, checkpoint SHA-256, evaluator version, and declared input modality.
@@ -799,7 +792,7 @@ manifest, checkpoint SHA-256, evaluator version, and declared input modality.
 
 The dataset paper, Appendix G.1, defines the following geographic split:
 
-| Official split | Scenes | Hours | Path | Released data | #121 use |
+| Official split | Scenes | Hours | Path | Released data | Use |
 |---|---:|---:|---:|---|---|
 | `train` | 534 | 3.00 | 81.0 km | all | primary map-conditioned training |
 | `val` | 117 | 0.60 | 14.5 km | all | paper-protocol benchmark only |
@@ -979,8 +972,8 @@ paper-reproduction, approximation, or official held-out.
 
 ---
 
-## 5. Phased plan (KitScenes priority, 2026-07-15)
-- **Phase 0 (done, retained):** L2D work established partition-independent IDs,
+## 5. Phased plan
+- **Phase 0:** L2D work established partition-independent IDs,
   option-B partition artifacts, bounded uploads, retries, and multi-directory
   train/eval. These foundations remain shared infrastructure.
 - **Phase 1 — complete the KitScenes parser contract:** add stable sample/split
@@ -990,12 +983,11 @@ paper-reproduction, approximation, or official held-out.
 - **Phase 2 — wire KitScenes into Flyte:** add `Dataset.KITSCENES`, scene-scoped
   ingest, explicit label/pack branches, three stage-level mapped arrays,
   deterministic scene planning, immutable source provenance, and the pinned
-  SDK/runtime dependencies in the data-prep image. Raise the KitScenes
-  `max_partitions` guard from 512 to at least 600. L2D and NVIDIA branches remain
+  SDK/runtime dependencies in the data-prep image. Set the KitScenes
+  `max_partitions` guard to at least 600. L2D and NVIDIA branches remain
   intact.
 - **Phase 3 — operational smoke:** apply and verify the planned Flyte namespace
-  quota (1000 CPU / 8 TiB; the handoff notes it is committed but not yet live),
-  and verify Flyte storage auth remains `accesskey` after the Helm/Terraform
+  quota (1000 CPU / 8 TiB), and verify Flyte storage auth remains `accesskey` after the Helm/Terraform
   operation. Rebuild/register images and workflows, then run one scene. Expand
   to a 10-scene test to validate fan-out, cache hits, manifest coverage, bounded
   Cosmos concurrency, source throughput, extract expansion, and multi-directory
@@ -1013,7 +1005,7 @@ paper-reproduction, approximation, or official held-out.
 - **Deferred:** do not launch or further adapt full L2D or NVIDIA PhysicalAI-AV
   in this milestone. Revisit them only after the KitScenes full run is complete.
 
-## 6. Test plan (revised per review)
+## 6. Test plan
 Do NOT byte-diff tar shards (member order / mtime / impl differences make
 semantically-identical shards differ). Compare per-uid, semantically:
 ```python
@@ -1058,7 +1050,7 @@ Required tests:
   replaces.
 - Not DDP in this milestone — training is explicitly single-GPU and may run for
   3–4 days.
-- Not running or optimizing L2D/NVIDIA — preserve those paths, but spend #121
+- Not running or optimizing L2D/NVIDIA — preserve those paths, but spend
   implementation and operational capacity on KitScenes only.
 - Not a full `DatasetAdapter` protocol refactor. KitScenes is the third dataset,
   but focused explicit branches are acceptable as long as all three satisfy the

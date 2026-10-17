@@ -1,6 +1,4 @@
 import torch
-import sys
-sys.path.append('..')
 
 from model_components.feature_fusion import FeatureFusion
 

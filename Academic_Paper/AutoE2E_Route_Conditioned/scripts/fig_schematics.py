@@ -7,102 +7,81 @@ from svgkit import SVG, MONO
 OUT = "/tmp/autoe2e_paper/vivlio/figures/"
 
 # ======================= Fig 2: temporal contract =======================
-s = SVG(760, 310, font_size=10.5)
-x0, x1 = 200, 730           # time axis from -6.4 s to +6.4 s
-def tx(t):  # t in seconds
-    return x0 + (t + 6.4) / 12.8 * (x1 - x0)
-axis_y = 262
-s.line(x0, axis_y, x1, axis_y, color="#333", width=1.2)
-for t in range(-6, 7):
-    s.line(tx(t), axis_y - 4, tx(t), axis_y + 4, color="#333")
-    s.text(tx(t), axis_y + 16, f"{t:+d}" if t else "0", size=9, anchor="middle")
-s.text((x0 + x1) / 2, axis_y + 32, "time relative to the current frame [s]  (10 Hz base rate = 0.1 s per step)", size=9.5, anchor="middle")
-s.line(tx(0), 30, tx(0), axis_y, color="#d62728", dash="4,3", width=1.2)
-s.text(tx(0) + 4, 40, "now (t = 0)", size=9, color="#d62728")
-
-def band(y, t_a, t_b, label, fill, stroke, h=26, text_color="#222", note=None):
-    s.add(f'<rect x="{tx(t_a)}" y="{y}" width="{tx(t_b) - tx(t_a)}" height="{h}" fill="{fill}" stroke="{stroke}" stroke-width="1.1" rx="4"/>')
-    s.text((tx(t_a) + tx(t_b)) / 2, y + h / 2 + 4, label, size=9.5, anchor="middle", color=text_color, weight="bold")
-    if note:
-        s.text(tx(t_b) + 6, y + h / 2 + 4, note, size=8.5, color="#444")
-
-# camera frames: 8 frames at -3.5..0 step 0.5
-y = 52
-s.text(14, y + 17, "Camera (T8)", size=10, weight="bold")
-for i, t in enumerate([-3.5 + 0.5 * k for k in range(8)]):
-    col = "#3F6FAE" if t < 0 else "#d62728"
-    s.add(f'<rect x="{tx(t) - 6}" y="{y}" width="12" height="26" fill="{"#E3EEF9" if t < 0 else "#FBE5E3"}" stroke="{col}" stroke-width="1.2" rx="2"/>')
-    s.text(tx(t), y + 40, f"{t:+.1f}" if t else "0", size=7.5, anchor="middle", color=col)
-s.text(tx(-3.5) - 8, y + 12, "7 history frames", size=8.5, anchor="end", color="#3F6FAE")
-s.text(tx(-3.5) - 8, y + 23, "6 views @ 512 px, detached", size=8.5, anchor="end", color="#3F6FAE")
-s.text(tx(0) + 10, y + 12, "current: 6 views @ 512 px", size=8.5, color="#d62728")
-s.text(tx(0) + 10, y + 23, "+ front view @ 1024 px (additive)", size=8.5, color="#d62728")
-s.text(tx(0) + 10, y + 34, "-> 3.5 s visual span at 2 Hz", size=8.5, color="#333")
-
-# egomotion history 6.4 s at 10 Hz
-y = 110
-s.text(14, y + 17, "Egomotion", size=10, weight="bold")
-band(y, -6.4, -4.0, "zero pad (benchmark)", "#F4F4F4", "#9A9A9A", text_color="#666")
-band(y, -4.0, 0.0, "4.0 s real history (40 steps)", "#E3EEF9", "#3F6FAE")
-s.text(tx(-6.4), y - 6, "64 steps x [speed, accel, yaw rate, curvature] = 256-d; training uses all 6.4 s", size=8.5)
-
-# planner output 6.4 s
-y = 168
-s.text(14, y + 17, "Planner output", size=10, weight="bold")
-band(y, 0.0, 6.4, "64 x (accel., curvature) @ 10 Hz -> rollout -> 64 XY", "#E2F3E4", "#2E8B57")
-
-# supervision / evaluation
-y = 214
-s.text(14, y + 17, "Targets (benchmark)", size=10, weight="bold")
-band(y, 0.0, 5.0, "50 valid steps: ADE/FDE @ 1,2,3,5 s; |lat|,|lon|", "#FCF4DB", "#B8860B")
-band(y, 5.0, 6.4, "no target", "#F4F4F4", "#9A9A9A", text_color="#666")
-s.text(tx(6.4) - 2, y - 6, "valid horizon coverage = 50/64 = 78.125 %", size=8.5, anchor="end", color="#B8860B")
-s.text(14, 22, "Temporal contract (KITScenes benchmark protocol: 40 history / 50 future steps; training: 64 / 64)",
-       size=10.5, weight="bold")
-s.save(OUT + "fig02_temporal_contract.svg")
+W,H=900,360
+s=SVG(W,H,font_size=10.5)
+s.text(18,22,"Temporal contract: camera history, egomotion, control output, and benchmark targets",size=11,weight="bold")
+x0,x1=190,870
+def tx(t): return x0+(t+6.4)/12.8*(x1-x0)
+# now line
+s.line(tx(0),35,tx(0),312,color="#d62728",dash="4,3",width=1.2)
+s.text(tx(0)+6,48,"now (t = 0)",size=9,color="#d62728")
+# Camera row
+s.text(18,82,"Camera (T8)",size=10.5,weight="bold")
+for t in [-3.5,-3,-2.5,-2,-1.5,-1,-.5,0]:
+    cur=t==0; x=tx(t)
+    s.add(f'<rect x="{x-7}" y="58" width="14" height="32" rx="2" fill="{"#FBE5E3" if cur else "#E3EEF9"}" stroke="{"#d62728" if cur else "#3F6FAE"}" stroke-width="1.2"/>')
+    s.text(x,103,"0" if cur else f"{t:.1f}",size=7.5,anchor="middle",color="#d62728" if cur else "#3F6FAE")
+s.text(x0,50,"7 history frames x 6 views @ 512 px; detached",size=8.6,color="#3F6FAE")
+s.text(tx(0)+18,72,"6 views @ 512 px",size=8.6,color="#d62728")
+s.text(tx(0)+18,84,"+ front @ 1024 px (additive)",size=8.6,color="#d62728")
+s.text(tx(0)+18,96,"3.5 s visual span at 2 Hz",size=8.6,color="#333")
+# Egomotion row
+s.text(18,153,"Egomotion",size=10.5,weight="bold")
+s.add(f'<rect x="{tx(-6.4)}" y="126" width="{tx(-4)-tx(-6.4)}" height="34" rx="4" fill="#F5F5F5" stroke="#999"/>')
+s.text((tx(-6.4)+tx(-4))/2,147,"zero pad in benchmark",size=8.4,anchor="middle",color="#666")
+s.add(f'<rect x="{tx(-4)}" y="126" width="{tx(0)-tx(-4)}" height="34" rx="4" fill="#E3EEF9" stroke="#3F6FAE"/>')
+s.text((tx(-4)+tx(0))/2,147,"40 real steps (4.0 s) in benchmark",size=8.6,anchor="middle",weight="bold")
+s.text(x0,119,"64 x [speed, acceleration, yaw rate, curvature] @ 10 Hz; training uses all 6.4 s",size=8.5)
+# Planner output row
+s.text(18,219,"Planner output",size=10.5,weight="bold")
+s.add(f'<rect x="{tx(0)}" y="191" width="{tx(6.4)-tx(0)}" height="34" rx="4" fill="#E2F3E4" stroke="#2E8B57"/>')
+s.text((tx(0)+tx(6.4))/2,212,"64 x (acceleration, curvature) @ 10 Hz -> rollout -> 64 XY points",size=8.6,anchor="middle",weight="bold")
+# Target row
+s.text(18,276,"Targets",size=10.5,weight="bold")
+s.add(f'<rect x="{tx(0)}" y="248" width="{tx(5)-tx(0)}" height="34" rx="4" fill="#FCF4DB" stroke="#B8860B"/>')
+s.text((tx(0)+tx(5))/2,269,"50 valid steps: ADE/FDE @ 1, 2, 3, 5 s; |lateral| / |longitudinal|",size=8.4,anchor="middle",weight="bold")
+s.add(f'<rect x="{tx(5)}" y="248" width="{tx(6.4)-tx(5)}" height="34" rx="4" fill="#F5F5F5" stroke="#999"/>')
+s.text((tx(5)+tx(6.4))/2,269,"no target",size=8.5,anchor="middle",color="#666")
+s.text(tx(5)-4,241,"valid coverage 50/64 = 78.125%",size=8.5,anchor="end",color="#B8860B")
+# Axis
+ay=312;s.line(x0,ay,x1,ay,color="#333",width=1.1)
+for t in range(-6,7):
+    s.line(tx(t),ay-4,tx(t),ay+4,color="#333")
+    s.text(tx(t),ay+17,"0" if t==0 else f"{t:+d}",size=8.5,anchor="middle")
+s.text((x0+x1)/2,ay+36,"time relative to current frame [s]  (10 Hz base rate = 0.1 s per step)",size=9,anchor="middle")
+s.text(W-12,22,"benchmark: 40 history / 50 future steps; training: 64 / 64",size=9.5,anchor="end",color="#555")
+s.save(OUT + "fig02_temporal_contract_v2.svg")
 
 # ======================= Fig 3: encoder layer detail =======================
-s = SVG(760, 480, font_size=10.5)
-s.text(14, 22, "One BEVFormer V2 encoder layer (x6, frozen) and the additive front-camera residual branch", size=11, weight="bold")
-bx, bw = 30, 250
-s.box(bx, 40, bw, 46, "BEV queries Q  (60,000 x 256)", ["300 x 200 learned embeddings + row/col position (128+128)"], style="frozen")
-s.box(bx, 104, bw, 72, "Temporal self-attention (T1 form)",
-      ["deformable; queue = {Q, Q} (current BEV duplicated)", "8 heads x 4 points per queue, offsets from [Q, Q+pos]",
-       "value_proj / output_proj 256 x 256; 0.23 M"], style="frozen")
-s.box(bx, 194, bw, 96, "Multi-scale spatial cross-attention",
-      ["reference points: 4 pillar heights z in [-5, 3] m", "projected by calibrated pinhole/fisheye operator",
-       "8 heads x 4 FPN levels x 8 points per view", "visible-view average; + level & camera embeddings", "0.33 M"],
-      style="frozen")
-s.box(bx, 308, bw, 46, "FFN 256 -> 512 -> 256 (ReLU, dropout 0.1)", ["0.26 M; 3 x LayerNorm (post-norm)"], style="frozen")
-s.box(bx, 370, bw, 36, "layer output -> next layer / current BEV", [], style="plain")
-for ya, yb in ((86, 104), (176, 194), (290, 308), (354, 370)):
-    s.arrow(bx + bw / 2, ya, bx + bw / 2, yb)
-s.text(bx + bw + 8, 140, "LN", size=9); s.text(bx + bw + 8, 246, "LN", size=9); s.text(bx + bw + 8, 332, "LN", size=9)
-
-# camera features side
-s.box(310, 104, 170, 72, "Camera FPN features",
-      ["6 views x 4 levels x 256 ch", "512 px base tiles", "history frames re-used (cached)"], style="input")
-s.arrow(310, 240, bx + bw, 240, label="values", label_dy=-4)
-s.line(395, 176, 395, 240, color="#333"); s.line(395, 240, 310, 240, color="#333")
-
-# front residual branch
-fx, fw = 500, 246
-s.box(fx, 40, fw, 58, "Native front tile 1024 x 1024 (t = 0)",
-      ["same ResNet-50 + FPN", "4 levels, one view"], style="input")
-s.box(fx, 116, fw, 96, "Front cross-attention (frozen copy of layer 6)",
-      ["reference points via the front-camera operator", "content-only delta: no level/camera embedding bias",
-       "delta = LN6(Q + attn) - LN6(Q)", "masked to cells observed by the front camera"], style="frozen")
-s.box(fx, 230, fw, 52, "Gate  tanh(g)  (g in R^256, zero-init)",
-      ["only trainable camera-side parameter (256)"], style="trainable", badge="gate train")
-s.box(fx, 300, fw, 52, "Current BEV  B_0 = B_enc + tanh(g) * delta",
-      ["at init: B_0 == B_enc exactly (no-op)"], style="plain")
-s.arrow(fx + fw / 2, 98, fx + fw / 2, 116); s.arrow(fx + fw / 2, 212, fx + fw / 2, 230); s.arrow(fx + fw / 2, 282, fx + fw / 2, 300)
-s.arrow(bx + bw, 388, fx + 40, 388, label=None); s.line(fx + 40, 388, fx + 40, 352, color="#333")
-s.text(fx + 46, 384, "B_enc (layer-6 output, current frame)", size=8.5)
-s.box(fx, 412, fw, 40, "-> T8 temporal fusion (+ 7 detached history BEVs)", [], style="frozen")
-s.arrow(fx + fw / 2, 352, fx + fw / 2 + 60, 412, elbow=fx + fw / 2 + 60)
-s.legend(30, 470, [("input", "input"), ("frozen", "frozen"), ("trainable", "trainable")])
-s.save(OUT + "fig03_encoder_layer.svg")
+W,H=900,510
+s=SVG(W,H,font_size=10.5)
+s.text(18,22,"BEVFormer V2 encoder layer (x6, frozen) and the current-frame high-resolution front residual",size=11,weight="bold")
+# left chain
+x,w=30,330
+s.box(x,42,w,48,"BEV queries Q  (60,000 x 256)",["300 x 200 learned embeddings + row/column position (128+128)"],style="frozen")
+s.box(x,112,w,82,"Temporal self-attention (T1 form)",["deformable; queue = {Q, Q} (current BEV duplicated)","8 heads x 4 points per queue; offsets from [Q, Q+pos]","value_proj / output_proj 256 x 256; 0.23 M"],style="frozen")
+s.box(x,216,w,112,"Multi-scale spatial cross-attention",["4 pillar heights z in [-5, 3] m -> calibrated pinhole/fisheye projection","8 heads x 4 FPN levels x 8 points per visible view","visible-view average + level/camera embeddings; 0.33 M"],style="frozen")
+s.box(x,350,w,58,"FFN 256 -> 512 -> 256",["ReLU, dropout 0.1; 0.26 M; three post-norm LayerNorms"],style="frozen")
+s.box(x,430,w,44,"Layer-6 output B_enc (current BEV)",["also passed to T8 temporal fusion"],style="plain")
+for a,b in [(90,112),(194,216),(328,350),(408,430)]: s.arrow(x+w/2,a,x+w/2,b)
+for yy in [155,270,378]: s.text(x+w+10,yy,"LN",size=8.5,color="#555")
+# FPN input
+s.box(390,112,190,82,"Camera FPN features",["6 views x 4 levels x 256 ch","512 px base tiles; history pyramids cached"],style="input")
+s.arrow(485,194,360,260,elbow=485,label="values",label_dy=-4)
+# right front branch
+rx,rw=610,260
+s.box(rx,42,rw,62,"Native front tile 1024 x 1024 (t = 0)",["shared ResNet-50 + FPN; 4 levels, one view"],style="input")
+s.box(rx,126,rw,112,"Front cross-attention (frozen copy of layer 6)",["reference points from the calibrated front-camera operator","content-only delta: no level/camera embedding affine terms","delta = LN6(Q + attn) - LN6(Q); masked to observed cells"],style="frozen")
+s.box(rx,260,rw,62,"Gate tanh(g), g in R^256, zero-initialised",["only trainable camera-side parameter: 256 values"],style="trainable",badge="gate train")
+s.box(rx,344,rw,64,"B_0 = B_enc + tanh(g) * delta",["at initialisation: B_0 = B_enc exactly (no-op)"],style="plain",mono_lines=("B_0 = B_enc + tanh(g) * delta",))
+s.box(rx,430,rw,44,"T8 fusion input: B_0 + 7 detached history BEVs",[],style="frozen")
+for a,b in [(104,126),(238,260),(322,344),(408,430)]: s.arrow(rx+rw/2,a,rx+rw/2,b)
+# current BEV feeds front branch query / residual path
+s.arrow(360,452,610,376,label="B_enc",label_dy=-4)
+# visual styling legend
+s.legend(30,500,[("input","input"),("frozen","frozen"),("trainable","trainable")])
+s.text(570,500,"The 1024-pixel branch is used only for t=0; every historical front image remains 512 x 512.",size=8.5,anchor="middle",color="#555")
+s.save(OUT + "fig03_encoder_layer_v2.svg")
 
 # ======================= Fig 6: navigation encoders + deformable fusion =======================
 s = SVG(760, 470, font_size=10.5)

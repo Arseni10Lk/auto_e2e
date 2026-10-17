@@ -1,4 +1,4 @@
-"""Tests for the compositional reasoning taxonomy (issue #98, v2).
+"""Tests for the compositional reasoning taxonomy.
 
 Pure-Python, no torch/GPU/network. Covers:
     * all seven action-relevant v1 groups exist with the right mode;
@@ -6,7 +6,7 @@ Pure-Python, no torch/GPU/network. Covers:
     * index order is stable and append-only (extend keeps existing indices);
     * register_group is append-only (duplicate name rejected);
     * validate_exact_match passes for identical taxonomies and fails on any
-      difference in groups / order / labels / mode (R10).
+      difference in groups / order / labels / mode.
 """
 
 from __future__ import annotations
@@ -69,10 +69,8 @@ def test_extend_is_append_only_and_preserves_indices():
     tax = ReasoningTaxonomy()
     before = {lbl: i for i, lbl in enumerate(tax.labels("cause"))}
     tax.extend("cause", ["debris_on_road"])
-    # existing indices unchanged
     for label, idx in before.items():
         assert tax.index("cause", label) == idx
-    # new label appended at the end
     assert tax.index("cause", "debris_on_road") == len(before)
 
 

@@ -1,10 +1,10 @@
-"""Prompt construction + response parsing for teacher endpoints (issue #98).
+"""Prompt construction + response parsing for teacher endpoints.
 
 Builds the closed-JSON prompt over the compositional taxonomy and parses the
 teacher's reply into a :class:`ReasoningLabelRecord`. Tolerant parsing: chatter
 around the JSON, unknown labels, and missing horizons degrade to abstain rather
-than raising — the caller's ``strict`` flag decides what to do with an
-empty/malformed answer (R9).
+than raising; the caller's ``strict`` flag decides what to do with an
+empty/malformed answer.
 """
 
 from __future__ import annotations
@@ -98,18 +98,15 @@ def _coerce_horizon(
         if taxonomy[group].mode is LabelMode.MULTI:
             values = raw if isinstance(raw, list) else []
             kept = [v for v in values if isinstance(v, str) and v in allowed]
-            # If NOTHING valid survives (all out-of-vocab, or none given), backfill
-            # the group's explicit abstain label instead of leaving an empty list.
-            # An empty MULTI list tensorizes to an all-zero [C] row (every class,
-            # including the abstain class, = 0) which BCE/ASL trains as a hard
-            # false-negative ("no hazard AND every hazard false"). The abstain
-            # label is the correct "nothing active here" and is masked/handled
-            # consistently downstream (R9: never a silent all-zero row).
+            # If nothing valid survives (all out-of-vocab, or none given), backfill
+            # the group's explicit abstain label. An empty multi-label list
+            # tensorizes to an all-zero [C] row, including the abstain class,
+            # which BCE/ASL would train as a hard false negative.
             kwargs[group] = kept if kept else [taxonomy[group].abstain_label]
         else:
             kwargs[group] = raw if isinstance(raw, str) and raw in allowed else None
     # Distinguish an explicit numeric confidence (kept, even 0.0) from a
-    # missing/non-numeric one. Defaulting a MISSING confidence to 0.0 would zero
+    # missing/non-numeric one. Defaulting a missing confidence to 0.0 would zero
     # source_weight and silently drop the whole (otherwise valid) horizon from the
     # loss; use a neutral 1.0 so a validated label is weighted by provenance.
     conf = entry.get("confidence", None)

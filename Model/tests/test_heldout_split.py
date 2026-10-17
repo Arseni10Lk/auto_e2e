@@ -1,9 +1,8 @@
 """Held-out train/val split for pre-extracted shards (fair generalization eval).
 
-The eval used to score the SAME shards used for training (all tars, no split), so
-ADE/FDE measured memorization and structurally favored the lower-capacity
-imitation baseline. make_pre_extracted_loader now supports a disjoint per-sample
-hash split. These tests pin the invariants the fair comparison relies on:
+Scoring the shards used for training would measure memorization, so
+make_pre_extracted_loader supports a disjoint per-sample hash split. These tests
+pin the invariants the fair comparison relies on:
   - train and val are DISJOINT (no sample in both),
   - the split is DETERMINISTIC across processes/reruns (fixed hash, not salted
     hash()), so the train task and the separate eval task agree,
@@ -53,8 +52,8 @@ def test_split_is_deterministic():
 
 
 def test_frames_of_same_episode_never_straddle_train_val():
-    """THE key #121 invariant: all frames of one episode land on ONE side, so
-    correlated neighbours don't leak across train/val."""
+    """All frames of one episode land on one side, so correlated neighbours
+    don't leak across train/val."""
     train_keep = _split_keep("train", 0.2)
     val_keep = _split_keep("val", 0.2)
     for ep in range(50):

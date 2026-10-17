@@ -4,7 +4,7 @@
 
 | Field | Value |
 |---|---|
-| Status | Accepted |
+| Status | Implemented in `Model/navigation/` (contracts, Lanelet2 and OSM/Valhalla adapters, native C++ rasterizer in `Model/navigation/native/`) |
 | Owner | riita10069 |
 | Created | 2026-07-25 |
 | Related issue | [#149](https://github.com/autowarefoundation/auto_e2e/issues/149) |
@@ -14,7 +14,7 @@
 
 ## 1. Executive Summary
 
-#149 requires one navigation contract across the KITScenes Lanelet2 training
+AutoE2E requires one navigation contract across the KITScenes Lanelet2 training
 path and the OSM/Valhalla runtime path:
 
 ```text
@@ -199,7 +199,7 @@ are prohibited.
 ### 4.3 Reasoning
 
 `HorizonReasoningHead` already accepts an optional `route_context`, but the
-initial #149 implementation deliberately leaves it unset. Existing Reasoning
+initial navigation implementation deliberately leaves it unset. Existing Reasoning
 labels and prompts remain route-agnostic. Reasoning scheduling and caching are
 separate concerns and do not gate Reactive route conditioning.
 
@@ -798,7 +798,7 @@ L2D and NVIDIA remain on their existing contracts during this milestone.
 
 ### 10.3 Reasoning labels
 
-The initial #149 implementation does not add route information to the
+The initial navigation implementation does not add route information to the
 Reasoning teacher request or label schema. Existing 1 Hz Reasoning labels remain
 valid because the model's Reasoning branch receives no route input. A future
 Reasoning-conditioning experiment must introduce a separately versioned prompt,
@@ -1057,24 +1057,20 @@ overflow, no browser errors, and non-empty canvas pixels.
 
 ## 17. Delivery Scope and Ownership
 
-### 17.1 Issue lifecycle
+### 17.1 Scope
 
-- #149 owns the complete navigation-input implementation: canonical contracts,
-  KITScenes Lanelet2 route derivation, C++ rasterization, Flyte packing, Reactive
-  model integration, OSM/Valhalla runtime routing, evaluation, and Console
-  provenance.
-- No external issue or contributor workstream gates #149 implementation,
-  training, or evaluation.
+The navigation-input implementation covers canonical contracts, KITScenes
+Lanelet2 route derivation, C++ rasterization, Flyte packing, Reactive model
+integration, OSM/Valhalla runtime routing, evaluation, and Console provenance.
 
 ### 17.2 Implementation boundaries
 
-All workstreams are owned by `riita10069`. Exact future-waypoint
-rasterization, direct route input to Reasoning, cloud routing, and closed-loop
-evaluation remain outside the initial scope.
+Exact future-waypoint rasterization, direct route input to Reasoning, cloud
+routing, and closed-loop evaluation remain outside the initial scope.
 
 ### 17.3 Normative design
 
-This document is the normative definition of #149 navigation contracts,
+This document is the normative definition of the navigation contracts,
 geometry, ownership, and acceptance criteria. Issue text may summarize the
 design but does not define a parallel interface. Any implementation-driven
 contract change updates this document before the conflicting implementation is
@@ -1198,7 +1194,7 @@ counterfactual checks.
 Compare the initial Reactive-only route path with Reasoning-only and combined
 Reactive/Reasoning conditioning. A Reasoning-conditioned variant requires a
 versioned route encoder, teacher context policy, and 1 Hz latent/token cache;
-none of those are implicit in the initial #149 implementation.
+none of those are implicit in the initial navigation implementation.
 
 ## 21. References
 

@@ -1,4 +1,4 @@
-"""Offline trajectory report tests adapted from trajectory-rendering PR #74."""
+"""Offline trajectory report tests."""
 
 from __future__ import annotations
 

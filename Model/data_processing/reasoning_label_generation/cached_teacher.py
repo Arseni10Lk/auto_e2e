@@ -1,4 +1,4 @@
-"""Cached teacher: re-serve labels from a prior artifact (issue #98, R3).
+"""Cached teacher: re-serve labels from a prior artifact.
 
 Lets a contributor (or CI) run the whole pipeline against labels generated once
 by a real teacher, with no model, network, or GPU. Reads a JSONL artifact

@@ -1,6 +1,6 @@
-"""Reasoning branch — horizon-aware, action-relevant reasoning head (issue #98).
+"""Reasoning branch — horizon-aware, action-relevant reasoning head .
 
-Opt-in (default OFF). Runtime-safe: importing this package pulls NO teacher
+Opt-in (default off). Importing this package pulls no teacher
 model or client — teacher supervision is generated offline (see
 ``data_processing.reasoning_label_generation``) and consumed as frozen labels.
 """

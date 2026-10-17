@@ -803,7 +803,7 @@ def finalize_dataset_publication(
         ).Table(dynamo_table)
         table.put_item(Item=item)
 
-    # This is the public gate and MUST remain the final write. Console readers
+    # This is the public gate and must remain the final write. Console readers
     # require it before advertising v2.1+; all S3 bodies and Dynamo pointers
     # already exist when the conditional put succeeds.
     written_sha256 = _put_immutable(

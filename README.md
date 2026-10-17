@@ -39,7 +39,7 @@ brings AutoE2E datasets, model results and pipeline state into one workspace. Us
 ## Free and fully open-source End-to-End AI model
 **AutoE2E is an open-source End-to-End AI model** which enables autonomous driving across highways, arterial roads and city streets using cameras-only, and without reliance on HD-maps. 
 
-AutoE2E outputs can be fused with Physics-based sensors such as LIDAR/RADAR to power **fully driverless Robotaxi applications**, and the basline camera-only model can be used to enable **L2++ automotive ADAS** applications for point-to-point hands-free navigation.
+AutoE2E outputs can be fused with Physics-based sensors such as LIDAR/RADAR to power **fully driverless Robotaxi applications**, and the baseline camera-only model can be used to enable **L2++ automotive ADAS** applications for point-to-point hands-free navigation.
 
 To learn more about how to participate in this project, please read the [onboarding guide](/ONBOARDING.md)
 
@@ -57,7 +57,7 @@ Requires **Python 3.12** (the pinned PyTorch build has no wheels for 3.13+).
    git clone https://github.com/autowarefoundation/auto_e2e.git
    cd auto_e2e
    make setup                      # CPU torch wheels
-   make setup TORCH_CHANNEL=cu118  # or a CUDA build (cu121, ... work too)
+   make setup TORCH_CHANNEL=cu118  # or a CUDA build (cu126, cu128, ... work too)
    ```
 
 2. **Verify the install** (optional)
@@ -77,7 +77,7 @@ Requires **Python 3.12** (the pinned PyTorch build has no wheels for 3.13+).
 git clone https://github.com/autowarefoundation/auto_e2e.git
 cd auto_e2e
 pip install -r requirements.txt                      # CPU torch wheels
-pip install -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cu118  # or a CUDA build (cu121, ... work too)
+pip install -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cu118  # or a CUDA build (cu126, cu128, ... work too)
 ```
 
 Without a `make` tool, you unfortunately cannot verify the install 
@@ -92,7 +92,7 @@ Review our academic paper, access our knowledge base and read through our work o
 
 ### Next steps
 - Explore the [Model](./Model/) folder for the model components, training and inference.
-- Follow the [Trial Guide](./TRIAL.md) to run the inference test on AWS EC2.
+- Follow the [Trial Guide](./TRIAL.md) to run the test suite on AWS EC2.
 
 ## Architecture at a glance
 

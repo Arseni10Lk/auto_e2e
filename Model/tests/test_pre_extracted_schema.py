@@ -838,15 +838,13 @@ class TestDecodeSampleMapSplit:
 
     def test_shard_pixels_normalized_exactly_once(self):
         """The raw-frame -> JPEG -> loader path must apply ImageNet Normalize
-        EXACTLY ONCE. Regression for the double-normalize bug (#77): the old
-        pre-extraction normalized in the dataset, clamped, then normalized again
-        in the loader. Here the shard JPEG is a plain (unnormalized) image, so the
+        exactly once. The shard JPEG is a plain (unnormalized) image, so the
         decoded tensor must equal Normalize(ToTensor(jpeg)) — and must NOT match a
         twice-normalized tensor."""
         from torchvision import transforms
         mean = [0.485, 0.456, 0.406]
         std = [0.229, 0.224, 0.225]
-        # A plain (unnormalized) shard image, as the corrected packer writes.
+        # A plain (unnormalized) shard image, as the packer writes.
         jpg = _jpeg_bytes((120, 60, 200))
         out = _decode_sample({"cam_0.jpg": jpg, "ego.npy": _ego_bytes()})
         decoded = out["visual_tiles"][0]
@@ -860,7 +858,7 @@ class TestDecodeSampleMapSplit:
             "decoded tensor must NOT be double-normalized"
 
     def test_no_camera_params_key(self):
-        """Geometry is a loader attribute now, never a per-sample tensor."""
+        """Geometry is a loader attribute, never a per-sample tensor."""
         sample = {f"cam_{i}.jpg": _jpeg_bytes((i, 0, 0)) for i in range(6)}
         sample["ego.npy"] = _ego_bytes()
         out = _decode_sample(sample)
@@ -960,7 +958,7 @@ class TestManifestProjection:
 
     def test_ftheta_roundtrip_shared_poly_via_to_spec(self, tmp_path):
         """A shared [K] fw_poly must survive to_spec -> manifest -> load and
-        project without a shape mismatch (round-2 review regression)."""
+        project without a shape mismatch."""
         from model_components.view_fusion.projection import FThetaProjection
 
         V = 2
@@ -979,7 +977,7 @@ class TestManifestProjection:
 
     def test_ftheta_roundtrip_per_view_poly_not_collapsed(self, tmp_path):
         """A per-view [V,K] fw_poly must survive to_spec -> load with EACH view's
-        polynomial preserved (codex review: to_spec was collapsing to view 0)."""
+        polynomial preserved, not collapsed to view 0."""
         from model_components.view_fusion.projection import FThetaProjection
 
         V = 2
@@ -1020,7 +1018,7 @@ class TestManifestProjection:
 
 
 class TestDecodeWorldModelWindows:
-    """WM window members hist_/fut_ decode to [steps, V, 3, H, W] (#13)."""
+    """WM window members hist_/fut_ decode to [steps, V, 3, H, W]."""
 
     def _window_sample(self, n_cams=6, T=4, F=4):
         sample = {f"cam_{i}.jpg": _jpeg_bytes((i, 0, 0)) for i in range(n_cams)}
@@ -1045,7 +1043,7 @@ class TestDecodeWorldModelWindows:
         assert "history_frames" not in out
         assert "future_frames" not in out
 
-    # --- deduped frame-pool path (#121 §3.4d) ---------------------------------
+    # --- deduped frame-pool path ----------------------------------------------
     def _pool_sample_and_accessor(self, n_cams=6, T=4, F=4):
         """A sample carrying window_index.json + a matching in-memory pool accessor.
 
@@ -1139,7 +1137,7 @@ class TestDecodeWorldModelWindows:
 
 
 class TestMergedDatasetLoader:
-    """Round-robin interleaving of multiple single-dataset loaders (#77 merge)."""
+    """Round-robin interleaving of multiple single-dataset loaders."""
 
     def _fake_loader(self, batches, projection, geom):
         class _L:
@@ -1447,11 +1445,9 @@ def _write_shards(dirpath, n_shards, per_shard):
 class TestLoaderYieldsAllSamplesUnderWorkers:
     """Regression: the loader must yield EVERY sample regardless of num_workers.
 
-    webdataset 1.0.2 auto-applies split_by_worker via the `workersplitter`
-    default; passing nodesplitter=split_by_worker too split the shard list TWICE,
-    so num_workers=N silently dropped (N-1)/N of the data (24/48 at nw=2, 12/48 at
-    nw=4). This pins that num_workers>0 sees the full dataset — the #121 P0
-    parallel-decode change and the eval loader (num_workers=4) both depend on it.
+    webdataset 1.0.2 already applies split_by_worker via its `workersplitter`
+    default; also passing nodesplitter=split_by_worker would split the shard list
+    twice and silently drop (N-1)/N of the data at num_workers=N.
     """
 
     def test_no_samples_dropped_across_worker_counts(self, tmp_path):
@@ -1468,7 +1464,10 @@ class TestLoaderYieldsAllSamplesUnderWorkers:
     def test_partition_loader_workers_are_not_persistent(self, tmp_path):
         shard_dir = tmp_path / "shards"
         _write_shards(shard_dir, n_shards=2, per_shard=1)
-        from data_parsing.pre_extracted import make_pre_extracted_loader
+        from data_parsing.pre_extracted import (
+            _detach_resource_tracker_pipe_from_exec,
+            make_pre_extracted_loader,
+        )
 
         loader = make_pre_extracted_loader(
             str(shard_dir),
@@ -1479,7 +1478,30 @@ class TestLoaderYieldsAllSamplesUnderWorkers:
         torch_loader = loader.pipeline[0]
         assert torch_loader.num_workers == 2
         assert torch_loader.persistent_workers is False
+        assert torch_loader.worker_init_fn is _detach_resource_tracker_pipe_from_exec
         loader.close()
+
+    def test_worker_init_keeps_tracker_pipe_out_of_exec(self, monkeypatch):
+        """Regression: an exec'd torch_shm_manager must not inherit the
+        resource-tracker pipe, or the parent hangs at interpreter exit."""
+        import os
+        from multiprocessing import resource_tracker
+
+        from data_parsing.pre_extracted import (
+            _detach_resource_tracker_pipe_from_exec,
+        )
+
+        read_fd, write_fd = os.pipe()
+        try:
+            os.set_inheritable(write_fd, True)
+            monkeypatch.setattr(
+                resource_tracker._resource_tracker, "_fd", write_fd
+            )
+            _detach_resource_tracker_pipe_from_exec(0)
+            assert os.get_inheritable(write_fd) is False
+        finally:
+            os.close(read_fd)
+            os.close(write_fd)
 
     def test_shuffle_seed_randomizes_full_shard_order(self, tmp_path):
         shard_dir = tmp_path / "shards"

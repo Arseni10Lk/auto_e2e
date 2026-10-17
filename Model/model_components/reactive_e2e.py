@@ -484,7 +484,7 @@ class ReactiveE2E(nn.Module):
     def __init__(self, backbone="swin_v2_tiny", num_views=7, embed_dim=256,
                  is_pretrained=True,
                  image_feature_size=8, view_fusion_kwargs=None,
-                 num_timesteps=64, num_signals=2, 
+                 num_timesteps=64, num_signals=2,
                  egomotion_dim=256,
                  visual_history_dim=896,
                  map_type="rasterized", map_context_channels=3,
@@ -558,7 +558,6 @@ class ReactiveE2E(nn.Module):
             ),
         )
 
-        # Multi-scale feature fusion with view unification.
         # view_fusion_kwargs forwards bev_h/bev_w/pc_range/image_size to BEV fusion.
         self.FeatureFusion = FeatureFusion(
             num_views=num_views,
@@ -581,15 +580,12 @@ class ReactiveE2E(nn.Module):
             else None
         )
 
-        # For BEV fusion mode the spatial size is bev_h × bev_w (potentially non-square).
-        # Read each dim with a default so a PARTIAL view_fusion_kwargs (e.g. only
-        # pc_range) doesn't KeyError — the `or` only fires for None/empty, and the
+        # The navigation BEV must match the image BEV (bev_h × bev_w). The
         # defaults must match BEVViewFusion's own (450×300).
         vfk = view_fusion_kwargs or {}
         map_output_h = vfk.get("bev_h", 450)
         map_output_w = vfk.get("bev_w", 300)
 
- 
         if map_context_channels <= 0 or route_channels <= 0:
             raise ValueError("navigation channel counts must be positive")
         self.map_context_channels = int(map_context_channels)
@@ -605,7 +601,7 @@ class ReactiveE2E(nn.Module):
             output_w=map_output_w,
             route_hidden_channels=route_encoder_hidden_channels,
         )
- 
+
         # Map BEV fusion: combines image BEV features with map BEV features
         self.MapBEVFusion = build_map_bev_fusion(
             map_fusion_mode,
@@ -639,12 +635,10 @@ class ReactiveE2E(nn.Module):
             **(temporal_memory_kwargs or {}),
         )
 
-        # Reasoning branch (1 Hz, opt-in, default OFF): horizon-aware,
-        # action-relevant reasoning over the effective visual history + ego
-        # context produced by TemporalMemory. Runs AFTER TemporalMemory so
-        # ego_ctx is available (see Design/horizon_reasoning_architecture.md).
-        # Feeds the planner through a ZERO-INIT coupling (reasoning_mode), a
-        # strict no-op at init so the reactive baseline is byte-identical.
+        # Reasoning branch (1 Hz, opt-in): horizon-aware reasoning over the
+        # visual/ego context produced by TemporalMemory. It feeds the planner
+        # through a zero-init coupling (reasoning_mode) that is a no-op at init
+        # (see Design/horizon_reasoning_architecture.md).
         self.enable_reasoning = enable_reasoning
         self.reasoning_mode = reasoning_mode if enable_reasoning else "none"
         self.ReasoningHead = None
@@ -671,11 +665,6 @@ class ReactiveE2E(nn.Module):
             reasoning_mode=self.reasoning_mode,
             **(planner_kwargs or {}),
         )
-
-        # NOTE: future visual-state prediction now lives in the World Model
-        # branch (WorldActionModel.predict_future, JEPA). The old ReactiveE2E-owned
-        # FutureState module was instantiated here but NEVER called in forward — a
-        # gradient-dead parameter block — so it is removed. See auto_e2e.py.
 
     def freeze_camera_bev(
         self,
@@ -1252,7 +1241,6 @@ class ReactiveE2E(nn.Module):
         """
         Run the reactive end-to-end autonomous-driving pipeline.
 
-
         Args:
             camera_tiles: (B, V, 3, H, W) — V real camera images.
             map_context: (B, C_map, H_map, W_map) — semantic BEV map.
@@ -1588,9 +1576,7 @@ class ReactiveE2E(nn.Module):
         visual_ctx, ego_ctx = self.TemporalMemory(visual_history, egomotion_history)
 
         # --- Reasoning branch (1 Hz, opt-in) ---
-        # Runs on the EFFECTIVE context TemporalMemory produced, so the reasoning
-        # head and the planner see the same visual/ego signal. Its latent /
-        # horizon tokens feed the planner through the zero-init coupling.
+        # Uses the same visual/ego context as the planner.
         reasoning_pred = None
         reasoning_latent = None
         reasoning_horizon_tokens = None

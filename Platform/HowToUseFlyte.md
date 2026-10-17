@@ -5,7 +5,7 @@ platform. Organized by **what you want to do**, so you can jump straight to your
 
 - **Flyte Console**: https://d1fk8c95f6ice9.cloudfront.net/console
 - **Login**: Cognito-protected. Credentials are shared with **Core Contributors only** —
-  ask **Ryota Yamada** for access. You will be redirected to a Cognito login page first.
+  ask the maintainers for access. You will be redirected to a Cognito login page first.
 - **Project**: `auto-e2e` · **Domain**: `development`
 
 > For task internals and parameters, see `flyte_workflow_parameters.md`.
@@ -19,10 +19,10 @@ platform. Organized by **what you want to do**, so you can jump straight to your
 
 1. Open https://d1fk8c95f6ice9.cloudfront.net/console
 2. You are redirected to the Cognito hosted login. Sign in with the credentials
-   provided to Core Contributors (ask **Ryota Yamada** — they are never stored in git).
+   provided to Core Contributors (ask the maintainers — they are never stored in git).
 3. You land on the Flyte Console home. Top-left, make sure the **Project** selector
    shows **`auto-e2e`** and the **Domain** selector shows **`development`**.
-   (Other Flyte sample projects were archived, so `auto-e2e` should be the only one.)
+   `auto-e2e` is the only active project.
 4. The left sidebar has three main sections you will use:
    - **Workflows** — the DAGs you can launch
    - **Tasks** — individual reusable steps
@@ -57,9 +57,8 @@ platform. Organized by **what you want to do**, so you can jump straight to your
    - **`backbone`** (dropdown): `swin_v2_tiny` / `conv_next_v2_tiny` / `res_net_50`
    - **`epochs_il`**, **`epochs_rl`**, **`batch_size`**, **`lr`**, **`tau`**, **`beta`**, **`episodes`** — numbers, defaults are fine for a smoke run.
 
-   There is no `fusion_mode` input: BEV fusion is hardcoded in the model since
-   PR #94 (concat / cross_attn were removed). To run IL without the memory-hungry
-   offline-RL step, launch **`workflows.wf_ingest_train_eval`** instead.
+   There is no `fusion_mode` input: the model always uses BEV fusion. To run IL
+   without the memory-hungry offline-RL step, launch **`workflows.wf_ingest_train_eval`** instead.
    - **No `hf_token` field** — the HF token is injected from a Kubernetes Secret.
 4. Click **Launch**. You are taken to the new **execution** page.
 
@@ -407,8 +406,8 @@ n1 data_processing(L2D)    n3 data_processing(NVIDIA) ← run in parallel
 - **Secrets never appear in the UI**: the HF token is injected from the `hf-token`
   Kubernetes Secret and is not a workflow input, so it will not show up in any
   Inputs panel.
-- **Archived clutter**: the default Flyte sample projects (`flytesnacks`, etc.) were
-  archived so only `auto-e2e` is visible.
+- **Project list**: the default Flyte sample projects (`flytesnacks`, etc.) are
+  archived, so only `auto-e2e` is visible.
 
 ---
 

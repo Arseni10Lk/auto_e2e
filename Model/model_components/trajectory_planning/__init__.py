@@ -23,12 +23,10 @@ def build_planner(planner_mode, **kwargs):
             f"Available: {sorted(PLANNER_REGISTRY)}."
         )
     if planner_mode == "flow_matching":
-        # The training loop (train_il) regresses forward()'s output with SmoothL1,
-        # but forward() Euler-integrates from a fresh noise sample every step — so
-        # that is NOT the flow-matching objective (velocity MSE against x1-x0) and
-        # drives the model to the conditional mean. The proper objective lives in
-        # compute_planner_loss, which is not wired into the train loop yet. Warn
-        # loudly so nobody trains this expecting real flow matching.
+        # train_il regresses forward()'s Euler-from-noise rollout, which is not
+        # the flow-matching objective (velocity MSE against x1-x0) and drives the
+        # model to the conditional mean. No training path computes the
+        # flow-matching velocity objective yet.
         import warnings
         warnings.warn(
             "planner_mode='flow_matching' is NOT correctly trainable via the "

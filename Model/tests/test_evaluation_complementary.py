@@ -1,7 +1,7 @@
-"""Tests for the complementary open-loop evaluation pieces (#66).
+"""Tests for the complementary open-loop evaluation pieces.
 
-These cover only what this PR *adds* on top of the existing
-``compute_open_loop_metrics`` / ``gate_check`` already in ``evaluation``:
+These cover what sits on top of ``compute_open_loop_metrics`` / ``gate_check``
+in ``evaluation``:
 nuPlan-aligned comfort metrics, an ego-footprint off-road proxy, training-free
 baselines, and validation splits. Pure-numpy, no model or dataset needed.
 """
@@ -27,7 +27,7 @@ def _zeros():
     return np.zeros((B, T)), np.zeros((B, T))
 
 
-# ---- comfort vs nuPlan bounds (#66 §3) ------------------------------------
+# ---- comfort vs nuPlan bounds ---------------------------------------------
 
 def test_comfort_reports_full_nuplan_key_set():
     a, k = _zeros()
@@ -74,7 +74,7 @@ def test_comfort_high_curvature_violates_lateral_and_yaw():
     assert m["max_yaw_rate"] > COMFORT_THRESHOLDS["yaw_rate"]
 
 
-# ---- off-road proxy: centre, footprint, dilation (#66 §2) -----------------
+# ---- off-road proxy: centre, footprint, dilation --------------------------
 
 def test_offroad_rate_all_drivable_is_zero():
     positions = np.random.randn(B, T, 2) * 2.0
@@ -106,7 +106,7 @@ def test_offroad_dilation_requires_margin():
     assert offroad_rate(positions, mask, 0.5, dilation_px=2) == 1.0
 
 
-# ---- baselines (#66 §5) ----------------------------------------------------
+# ---- baselines -------------------------------------------------------------
 
 def test_constant_velocity_baseline_is_zeros():
     a, k = constant_velocity_baseline(B, T)
@@ -146,7 +146,7 @@ def test_open_loop_metrics_ignore_errors_after_three_seconds():
     assert metrics["FDE@3s"] == 0.0
 
 
-# ---- splits (#66 §4) -------------------------------------------------------
+# ---- splits ----------------------------------------------------------------
 
 def test_episode_range_split():
     train, val = episode_range_split(100, val_fraction=0.1)

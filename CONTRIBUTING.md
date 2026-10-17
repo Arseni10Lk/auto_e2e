@@ -3,7 +3,7 @@ Autoware is supported by people like you, and all types and sizes of contributio
 
 
 # Code of Conduct
-To ensure the Autoware community stays open and inclusive, please follow the [Code of Conduct](https://github.com/autowarefoundation/autoware.privately-owned-vehicles/blob/main/CODE_OF_CONDUCT.md).
+To ensure the Autoware community stays open and inclusive, please follow the [Code of Conduct](./CODE_OF_CONDUCT.md).
 
 If you believe that someone in the community has violated the Code of Conduct, please make a report by emailing conduct@autoware.org
 
@@ -11,7 +11,7 @@ If you believe that someone in the community has violated the Code of Conduct, p
 
 ## About this project
 
-Please ensure that you have read the [README](https://github.com/autowarefoundation/autoware.privately-owned-vehicles/blob/main/README.md) file and developer [ONBOARDING](https://github.com/autowarefoundation/autoware.privately-owned-vehicles/blob/main/ONBOARDING.md) guide of this project to understand the goals and objectives and processes followed in this project.
+Please ensure that you have read the [README](./README.md) file and developer [ONBOARDING](./ONBOARDING.md) guide of this project to understand the goals and objectives and processes followed in this project.
 
 
 ## Contributing to open source projects
@@ -72,16 +72,6 @@ For more information on how to submit a good pull request, have a read of the [p
 
 ## Pull request checks
 
-We have various CI workflow checks to ensure the quality of pull requests.
-
-### `semantic-pull-request`
-
-This workflow makes sure [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/) is applied to the pull request title.
-Find more details in the [Autoware Documentation](https://autowarefoundation.github.io/autoware-documentation/main/contributing/pull-request-guidelines/#apply-conventional-commits-to-the-pull-request-title-required-automated).
-
-### `pre-commit`
-
-[pre-commit](https://pre-commit.ci/) is a tool to run formatters or linters when you commit.
-This workflow checks whether the pull request has no error with pre-commit.
-
-Find more info in the [Autoware Documentation](https://autowarefoundation.github.io/autoware-documentation/main/contributing/pull-request-guidelines/ci-checks/#pre-commit).
+The `CI` workflow runs on every push and pull request. It runs ruff (`make lint`),
+mypy (`make typecheck`) and the unit tests (`make test`). Run `make ci` locally to
+reproduce the same checks before opening a pull request.

@@ -12,7 +12,7 @@ concurrency:
 jobs:
   lint-and-test:
     runs-on: ubuntu-latest
-    # Fail fast: 45s CI failures should NOT block a 6 min re-run.
+    # Cap hung runs well below the 6h GitHub default.
     timeout-minutes: 12
     steps:
       - uses: actions/checkout@v4
@@ -21,18 +21,16 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-          # Native pip cache scoped by requirements.txt: hits when the deps are
-          # unchanged, so torch (~1GB) is downloaded ONCE per requirements bump
-          # instead of every run.
+          # Keyed on requirements.txt so torch (~1GB) is only re-downloaded
+          # when the pins change.
           cache: pip
           cache-dependency-path: requirements.txt
 
       - name: Install dependencies
         run: make setup
 
-      # Run lint/typecheck/tests IN PARALLEL — they don't share state and each is
-      # short (~30s), so serializing them wastes ~1 min. `if: always()` on the
-      # later steps keeps the failure signal from all of them, not just the first.
+      # `if: always()` on the later steps reports failures from every check,
+      # not just the first one that fails.
       - name: Lint with ruff
         run: make lint
 

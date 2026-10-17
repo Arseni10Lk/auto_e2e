@@ -90,9 +90,8 @@ def poses_to_arrays(
     speed_safe = np.where(speed < _MIN_SPEED, _MIN_SPEED, speed)
     curvature = yaw_rate / speed_safe                              # (T,)
 
-    # Channel 2 is YAW_RATE (rad/s), matching L2D and NVIDIA so the merged
-    # multi-dataset loader feeds one consistent physical quantity into the shared
-    # ego encoder (yaw_rate is already computed above for curvature).
+    # Channel 2 is yaw rate (rad/s), matching L2D and NVIDIA, because all
+    # datasets feed one shared ego encoder.
     egomotion = np.stack(
         [speed, acceleration, yaw_rate, curvature], axis=1
     ).astype(np.float32)

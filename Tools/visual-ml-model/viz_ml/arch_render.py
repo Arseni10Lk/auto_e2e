@@ -135,7 +135,7 @@ _TEMPLATE = """<!doctype html>
 </body></html>
 """
 
-# ---- palette: 5 new figure roles overlaid on the shared flow palette ----
+# Arch-specific roles overlaid on the base palette.
 ARCH_COLORS = {
     "loss":            ("#3a1326", "#e06c9a"),  # pink — Trajectory/Feature Loss
     "policy":          ("#261a3a", "#8e4ec6"),  # purple — Driving Policy (fan-out hub)
@@ -151,7 +151,6 @@ EDGE_STYLE = {
     "skip":     {"color": "#ffe08a", "dash": "4 4",  "width": 1.5, "marker": "ar-skip"},
 }
 
-# ---- geometry constants (dark theme, tuned for paper-figure readability) ----
 BOX_W = 212
 COL_GAP = 104
 ROW_GAP = 26
@@ -182,7 +181,7 @@ def _fmt_shape_arch(shape) -> str:
     return s
 
 
-# ---- Python text-width estimation (no browser measureText) ----
+# Text width is estimated in Python; there is no browser measureText.
 _NARROW = set("iljftI.,:;|!'\" ")
 _WIDE = set("mwMW@")
 
@@ -226,7 +225,6 @@ def _wrap(text: str, max_w: float, px: float, max_lines: int = 2) -> tuple[list[
         lines.append(cur)
     truncated = False
     if len(lines) >= max_lines:
-        # was there leftover content?
         joined = " ".join(lines)
         if joined.rstrip() != text.rstrip():
             truncated = True
@@ -244,10 +242,6 @@ def _box_height(node: dict) -> tuple[int, list[str], bool]:
     h = 10 + TITLE_H + len(lines) * LINE_H + (SHAPE_H if has_shape else 0) + 12
     return max(MIN_H, h), lines, trunc
 
-
-# ---------------------------------------------------------------------------
-# layout
-# ---------------------------------------------------------------------------
 
 def _layout(arch: dict[str, Any]) -> dict[str, Any]:
     nodes = arch.get("nodes", [])
@@ -412,7 +406,7 @@ def _layout(arch: dict[str, Any]) -> dict[str, Any]:
     order = best
 
     # push train_only nodes to the BOTTOM rows of each column so the auxiliary/training
-    # branch reads as a band below the main inference spine (like the reference figure).
+    # branch reads as a band below the main inference spine.
     # Stable so the barycenter ordering is preserved within each band.
     for c in order:
         pos = {n: i for i, n in enumerate(order[c])}
@@ -445,7 +439,7 @@ def _layout(arch: dict[str, Any]) -> dict[str, Any]:
     # Two-band layout: the main (inference) band on top, the train-only band below it.
     # Stack each band per column from its own cursor; the train-only band starts below the
     # tallest main-band column so the auxiliary branch reads as a clean lower region under
-    # the spine (matching the reference figure), never interleaved with it.
+    # the spine, never interleaved with it.
     main_h: dict[int, float] = {}
     train_h: dict[int, float] = {}
     for c in range(ncols):
@@ -490,10 +484,6 @@ def _layout(arch: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-# ---------------------------------------------------------------------------
-# SVG
-# ---------------------------------------------------------------------------
-
 def render_arch_svg(arch: dict[str, Any]) -> tuple[str, int, int, list[str]]:
     L = _layout(arch)
     by_id, col, x, y_top, heights = L["by_id"], L["col"], L["x"], L["y_top"], L["heights"]
@@ -529,7 +519,7 @@ def render_arch_svg(arch: dict[str, Any]) -> tuple[str, int, int, list[str]]:
     groups = arch.get("groups", [])
     # the banner covers train-only *blocks*, but NOT loss nodes (losses live in the
     # right-most column as the natural endpoint; boxing them makes the band span the whole
-    # figure). The reference figure bands the auxiliary branch, not the loss column.
+    # figure).
     train_ids = [n["id"] for n in arch.get("nodes", [])
                  if n.get("train_only") and by_id[n["id"]].get("role") != "loss"]
     banner_specs = []

@@ -1,13 +1,14 @@
 # Data parsing recipe for [NVIDIA Physical AI Dataset](https://huggingface.co/datasets/nvidia/PhysicalAI-Autonomous-Vehicles)
 
-Parser for the NVIDIA Physical AI dataset, producing tensors directly consumable by AutoE2E's `forward()`.
+Parser for the NVIDIA Physical AI dataset. It is a pre-extraction source: frames are returned raw, the shard packer resizes them and the pre-extracted loader normalizes them.
 
 Download (a subset of) the dataset into `data`.
 
 ## Model inputs produced
 
-- `visual_tiles` `(8, 3, H, W)` — 7 camera frames + 1 map tile placeholder
-- `visual_history` `(896,)` — 64 frames × 14-dim compressed scene memory (currently a zero placeholder; populated at training time by a rolling-buffer encoder)
+- `visual_tiles` `(7, 3, H, W)` uint8 — 7 raw camera frames at native resolution
+- `map_tile` `(3, H, W)` uint8 — zero tile for the separate map branch (the dataset has no rendered map)
+- `visual_history` `(896,)` — 64 frames × 14-dim compressed scene memory (zeros)
 - `egomotion_history` `(256,)` — 64 past timesteps × 4 signals at 10 Hz
 - `trajectory_target` `(128,)` — 64 future timesteps × 2 signals (supervision target)
 
@@ -15,7 +16,7 @@ Download (a subset of) the dataset into `data`.
 
 - `[0]` Speed (m/s) — `sqrt(vx^2 + vy^2)`
 - `[1]` Acceleration (m/s^2) — `ax`
-- `[2]` Yaw angle (rad) — quaternion → ZYX Euler via `EgomotionState.pose`
+- `[2]` Yaw rate (rad/s) — differenced unwrapped ZYX yaw from `EgomotionState.pose`
 - `[3]` Curvature (rad/m) — `curvature`
 
 ### Trajectory target signals `(128,) = 64 × 2`
@@ -35,54 +36,25 @@ All valid `(clip_uuid, sample_idx)` pairs are enumerated at dataset construction
 from data_parsing.nvidia_physical_ai import NvidiaAVDataset
 from torch.utils.data import DataLoader
 
-dataset = NvidiaAVDataset(
-    data_root="/path/to/nvidia_physical_ai_dataset",
-    backbone_name="swinv2_tiny_window8_256",
-)
+dataset = NvidiaAVDataset(data_root="/path/to/nvidia_physical_ai_dataset")
 
-# Single clip for forward pass validation
+# Single clip for smoke tests
 dataset = NvidiaAVDataset(
     data_root="/path/to/nvidia_physical_ai_dataset",
-    backbone_name="swinv2_tiny_window8_256",
     clip_uuids=["fd1d1b6b-59bf-4292-8295-5028aa6aa5e3"],
 )
 
 loader = DataLoader(dataset, batch_size=8, shuffle=True, num_workers=4)
 
 for batch in loader:
-    visual_tiles      = batch["visual_tiles"].to(device)       # (B, 8, 3, H, W)
-    visual_history    = batch["visual_history"].to(device)     # (B, 896)
-    egomotion_history = batch["egomotion_history"].to(device)  # (B, 256)
-    trajectory_target = batch["trajectory_target"].to(device)  # (B, 128)
-
-    trajectory, ego_hidden, future = model(visual_tiles, visual_history, egomotion_history)
-    loss = criterion(trajectory, trajectory_target)
-```
-
-## Image preprocessing
-
-Preprocessing is derived at runtime from the backbone's own config via timm:
-
-```python
-data_config = timm.data.resolve_model_data_config(backbone)
-transform = timm.data.create_transform(**data_config, is_training=False)
-```
-
-This means normalisation, resize, and crop parameters always match the backbone's training. If the backbone changes, pass a different `backbone_name` to `NvidiaAVDataset`.
-
-## Forward pass test
-
-```bash
-cd Model/data_parsing/nvidia_physical_ai
-python forward_pass_test.py \
-    --dataset_root data \
-    --clip_uuid fd1d1b6b-59bf-4292-8295-5028aa6aa5e3
+    visual_tiles      = batch["visual_tiles"]       # (B, 7, 3, H, W) uint8
+    egomotion_history = batch["egomotion_history"]  # (B, 256)
+    trajectory_target = batch["trajectory_target"]  # (B, 128)
 ```
 
 ## Additional dependencies
 
 ```
 physical_ai_av   # NVIDIA dataset SDK (pip install git+https://github.com/NVlabs/physical_ai_av.git); requires python >= 3.11
-timm             # backbone config and transforms
 pandas
 ```

@@ -8,7 +8,6 @@ import math
 import os
 import re
 import time
-from datetime import timedelta
 from pathlib import Path
 from typing import Any, List, Mapping, NamedTuple, Optional
 from urllib.parse import urlparse
@@ -85,7 +84,6 @@ BEV_POS_WEIGHT_CAP = 64.0
 BEV_CANARY_MIN_SELECTION_GAIN = 1e-3
 BEV_CANARY_AP_LIFT_ABSOLUTE_REGRESSION_TOLERANCE = 1e-3
 BEV_CANARY_RARE_AP_LIFT_RELATIVE_REGRESSION_TOLERANCE = 0.1
-P5EN_SMOKE_MAX_RUNTIME = timedelta(minutes=30)
 NUPLAN_EPOCH5_TRAJECTORY_ROUTE_CHECKPOINT_SHA256 = (
     "ca8b43d7a777d6fd9195bb253d1452f3cd645f7aab3bd0e36b1f74ffb31df29b"
 )
@@ -378,10 +376,6 @@ def _resolve_nuplan_validation_sample_limit(
             "checkpoint"
         )
     return checkpoint_sample_limit, "checkpoint"
-
-
-class RaySmokeOutput(NamedTuple):
-    report: FlyteFile
 
 
 class ReactiveRayOutput(NamedTuple):
@@ -719,16 +713,6 @@ RAY_2 = _ray_job_config(
     worker_memory="12Gi",
     worker_shm_size="4Gi",
 )
-RAY_4 = _ray_job_config(
-    1,
-    worker_workload_type="p5en-capacity-block",
-    worker_cpu="48",
-    worker_memory="512Gi",
-    worker_shm_size="64Gi",
-    gpus_per_pod=4,
-    worker_ephemeral_storage="500Gi",
-    require_distinct_hosts=False,
-)
 RAY_REACTIVE_4 = _ray_job_config(
     1,
     worker_workload_type="p5en-capacity-block",
@@ -749,50 +733,6 @@ RAY_8 = _ray_job_config(
     worker_ephemeral_storage="500Gi",
     require_distinct_hosts=False,
 )
-
-
-@task(
-    task_config=RAY_4,
-    container_image=TRAINING_IMAGE,
-    retries=1,
-    timeout=P5EN_SMOKE_MAX_RUNTIME,
-    labels={
-        "kueue.x-k8s.io/queue-name": "p5en-capacity-block",
-        "kueue.x-k8s.io/priority-class": "research-low",
-    },
-    environment=RAY_TASK_ENVIRONMENT,
-)
-def ray_ddp_smoke_4(
-    capacity_block_end_utc: str,
-    steps: int = 4,
-) -> RaySmokeOutput:
-    from distributed_training.ray_smoke import run_smoke
-
-    context = current_context()
-    execution_name = (
-        context.execution_id.name
-        if context.execution_id is not None
-        else "local"
-    )
-    run_name = re.sub(
-        r"[^a-zA-Z0-9_-]",
-        "-",
-        f"{execution_name}-ray-ddp-smoke-4",
-    )
-    result = run_smoke(
-        num_workers=4,
-        steps=steps,
-        storage_path=RAY_STORAGE_PATH,
-        run_name=run_name,
-        capacity_block_end_utc=capacity_block_end_utc,
-    )
-    report_path = Path("/tmp/ray-ddp-smoke/report.json")
-    report_path.parent.mkdir(parents=True, exist_ok=True)
-    report_path.write_text(
-        json.dumps(result, indent=2, sort_keys=True) + "\n",
-        encoding="ascii",
-    )
-    return RaySmokeOutput(report=FlyteFile(str(report_path)))
 
 
 def _flyte_remote_uri(value: FlyteDirectory | FlyteFile) -> str:
@@ -4257,17 +4197,6 @@ def publish_reactive_bev_evaluation(
         registered_model_name=REACTIVE_BEV_REGISTERED_MODEL,
         registered_model_version=registered_model_version,
     )
-
-
-@workflow
-def wf_ray_ddp_smoke_4(
-    capacity_block_end_utc: str,
-    steps: int = 4,
-) -> FlyteFile:
-    return ray_ddp_smoke_4(
-        capacity_block_end_utc=capacity_block_end_utc,
-        steps=steps,
-    ).report
 
 
 @workflow

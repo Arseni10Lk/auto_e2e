@@ -1,22 +1,13 @@
-"""Unit tests for the JEPA feature-reconstruction loss and the optional
-action conditioning of FutureState (Issue #13).
+"""Unit tests for the JEPA feature-reconstruction loss.
 
-The loss compares FutureState's predicted future BEV features against
-targets that, in production, come from a frozen backbone applied to the
-future frames (+1.6/3.2/4.8/6.4s). Here we use random tensors of the
-correct shapes — the contract under test is shapes/reduction/gradients,
-not the data pipeline.
+In production the targets come from a frozen backbone applied to the future
+frames (+1.6/3.2/4.8/6.4s). Random tensors of the correct shapes are used here;
+the contract under test is shapes, reduction and gradients.
 """
-
-import os
-import sys
 
 import pytest
 import torch
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-
-from model_components.future_state import FutureState
 from model_components.losses import FeatureReconstructionLoss
 
 EMBED_DIM = 32  # small for fast tests; production uses 256
@@ -33,7 +24,7 @@ def _make_features(requires_grad=False, seed=None):
 
 
 class TestLossType:
-    """loss_type l1/l2/smooth_l1 (V-JEPA uses L1; #13)."""
+    """loss_type l1/l2/smooth_l1 (V-JEPA uses L1)."""
 
     def test_invalid_loss_type_raises(self):
         with pytest.raises(ValueError, match="loss_type"):
@@ -137,80 +128,3 @@ class TestFeatureReconstructionLoss:
     def test_wrong_temporal_weights_length_raises(self):
         with pytest.raises(ValueError):
             FeatureReconstructionLoss(temporal_weights=[1.0, 2.0])
-
-    def test_end_to_end_with_future_state(self):
-        """Loss must propagate gradients through FutureState parameters."""
-        model = FutureState(embed_dim=EMBED_DIM, ego_hidden_dim=EMBED_DIM)
-        fused = torch.randn(B, EMBED_DIM, H, W)
-        ego_hidden = torch.randn(B, EMBED_DIM)
-        pred = model(fused, ego_hidden)
-        target = tuple(t.detach() + 0.1 for t in pred)
-        loss = FeatureReconstructionLoss()(pred, target)
-        loss.backward()
-        for name, p in model.named_parameters():
-            assert p.grad is not None, f"No gradient for {name}"
-
-
-class TestFutureStateActionConditioning:
-    ACTION_DIM = 128  # 64 timesteps x 2 signals
-
-    def test_default_behavior_unchanged_shapes(self):
-        """action_dim=None (default) keeps the original contract intact."""
-        model = FutureState(embed_dim=EMBED_DIM, ego_hidden_dim=EMBED_DIM)
-        assert model.action_proj is None
-        fused = torch.randn(B, EMBED_DIM, H, W)
-        ego_hidden = torch.randn(B, EMBED_DIM)
-        out = model(fused, ego_hidden)
-        assert len(out) == 4
-        for t in out:
-            assert t.shape == (B, EMBED_DIM, H, W)
-
-    def test_trajectory_changes_output_when_action_dim_set(self):
-        torch.manual_seed(0)
-        model = FutureState(
-            embed_dim=EMBED_DIM, ego_hidden_dim=EMBED_DIM,
-            action_dim=self.ACTION_DIM,
-        )
-        fused = torch.randn(B, EMBED_DIM, H, W)
-        ego_hidden = torch.randn(B, EMBED_DIM)
-        traj_a = torch.randn(B, self.ACTION_DIM)
-        traj_b = torch.randn(B, self.ACTION_DIM)
-        out_a = model(fused, ego_hidden, trajectory=traj_a)
-        out_b = model(fused, ego_hidden, trajectory=traj_b)
-        assert not torch.allclose(out_a[0], out_b[0]), (
-            "Counterfactual trajectories must produce different rollouts"
-        )
-
-    def test_action_dim_set_but_no_trajectory_still_works(self):
-        model = FutureState(
-            embed_dim=EMBED_DIM, ego_hidden_dim=EMBED_DIM,
-            action_dim=self.ACTION_DIM,
-        )
-        fused = torch.randn(B, EMBED_DIM, H, W)
-        ego_hidden = torch.randn(B, EMBED_DIM)
-        out = model(fused, ego_hidden)
-        assert len(out) == 4
-
-    def test_trajectory_without_action_dim_raises(self):
-        model = FutureState(embed_dim=EMBED_DIM, ego_hidden_dim=EMBED_DIM)
-        fused = torch.randn(B, EMBED_DIM, H, W)
-        ego_hidden = torch.randn(B, EMBED_DIM)
-        traj = torch.randn(B, self.ACTION_DIM)
-        with pytest.raises(ValueError):
-            model(fused, ego_hidden, trajectory=traj)
-
-    def test_gradient_flows_through_trajectory(self):
-        """Gradients must reach the trajectory — required for training the
-        planner through the world-model loss."""
-        model = FutureState(
-            embed_dim=EMBED_DIM, ego_hidden_dim=EMBED_DIM,
-            action_dim=self.ACTION_DIM,
-        )
-        fused = torch.randn(B, EMBED_DIM, H, W)
-        ego_hidden = torch.randn(B, EMBED_DIM)
-        traj = torch.randn(B, self.ACTION_DIM, requires_grad=True)
-        out = model(fused, ego_hidden, trajectory=traj)
-        sum(t.pow(2).mean() for t in out).backward()
-        assert traj.grad is not None
-        assert torch.isfinite(traj.grad).all()
-        assert model.action_proj.weight.grad is not None

@@ -13,19 +13,16 @@ phases:
       - ECR_URL="${ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com"
       - test -n "${IMAGE_TAG}"
       - aws ecr get-login-password --region $AWS_DEFAULT_REGION | docker login --username AWS --password-stdin $ECR_URL
-      # Pre-pull previous latests so BuildKit's --cache-from can reuse every
-      # layer whose input hasn't changed (torch/pip layers, ffmpeg apt layer,
-      # etc.). ||true so first-run misses don't fail. Runs in parallel.
+      # Pre-pull the previous :latest images so --cache-from can reuse unchanged
+      # layers. `|| true` tolerates first-run misses.
       - echo "=== Pre-pulling previous latests for layer cache ==="
       - (docker pull ${ECR_URL}/auto-e2e/training:latest || true) &
       - (docker pull ${ECR_URL}/auto-e2e/data-prep:latest || true) &
       - wait
   build:
     commands:
-      # ── Training / eval / offline-rl ── SAME Dockerfile, so build ONCE and
-      # retag. Cuts 2 of 4 image builds (was ~3 min × 3 = ~9 min duplication).
-      # --cache-from pulls layer cache from ECR :latest → unchanged pip layers
-      # reuse across CodeBuild runs.
+      # Training, eval and offline-rl share one Dockerfile: build once and tag
+      # it three times.
       - echo "=== Building shared training image (training/eval/offline-rl) ==="
       - DOCKER_BUILDKIT=1 docker build
           --cache-from ${ECR_URL}/auto-e2e/training:latest
@@ -35,11 +32,8 @@ phases:
           -t ${ECR_URL}/auto-e2e/offline-rl:${IMAGE_TAG}
           -f Platform/docker/training/Dockerfile .
 
-      # ── Data-prep ── independent Dockerfile (~5GB). Build BEFORE pushing so
-      # the whole build stage is done before we start any push (the previous
-      # parallel-with-push scheme raced with CodeBuild command boundaries and
-      # sometimes returned before data-prep finished). --cache-from turns
-      # Model/-only edits into a ~30s rebuild instead of full pip reinstall.
+      # Data-prep has its own Dockerfile (~5GB). Every image is built before
+      # any push starts so a push cannot race an unfinished build.
       - echo "=== Building data-prep image ==="
       - DOCKER_BUILDKIT=1 docker build
           --cache-from ${ECR_URL}/auto-e2e/data-prep:latest
@@ -47,9 +41,8 @@ phases:
           -t ${ECR_URL}/auto-e2e/data-prep:${IMAGE_TAG}
           -f Platform/docker/data-prep/Dockerfile .
 
-      # ── Push ALL images in parallel now that every image is built. ECR dedups
-      # blobs so the training/eval/offline-rl push is paid once, and data-prep
-      # ships in parallel — much faster than the old sequential push.
+      # Push in parallel. ECR dedups blobs, so the three training-image tags
+      # upload the layers once.
       - echo "=== Pushing all images in parallel ==="
       - |
         docker push ${ECR_URL}/auto-e2e/training:${IMAGE_TAG} &
@@ -60,8 +53,7 @@ phases:
         PID_O=$!
         docker push ${ECR_URL}/auto-e2e/data-prep:${IMAGE_TAG} &
         PID_D=$!
-        # wait -n was returning early on some CodeBuild agents; wait on each PID
-        # explicitly so a push failure is surfaced.
+        # Wait on each PID explicitly so any push failure fails the build.
         wait $PID_T && echo "training pushed" || exit 1
         wait $PID_E && echo "eval pushed" || exit 1
         wait $PID_O && echo "offline-rl pushed" || exit 1

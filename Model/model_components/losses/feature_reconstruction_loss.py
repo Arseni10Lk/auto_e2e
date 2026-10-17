@@ -3,16 +3,13 @@ import torch.nn as nn
 
 
 class FeatureReconstructionLoss(nn.Module):
-    """JEPA-style feature reconstruction loss for the FutureState world model.
+    """JEPA-style feature reconstruction loss for the world model.
 
-    Compares the future BEV feature maps predicted by ``FutureState`` (a
+    Compares the future feature maps predicted by the world model (a
     tuple/list of ``num_future_steps`` tensors, each ``[B, C, H, W]``) against
-    target feature maps of identical shapes. Following the JEPA recipe, the
-    loss lives in *feature space* rather than pixel space: in production the
-    targets are extracted by a frozen copy of the image backbone (no gradient)
-    applied to the future frames at +1.6s, +3.2s, +4.8s and +6.4s, so the
-    world model learns to predict abstract scene dynamics instead of
-    reconstructing pixels.
+    target feature maps of identical shapes. The loss is in feature space:
+    targets come from a frozen image backbone applied to the future frames at
+    +1.6s, +3.2s, +4.8s and +6.4s.
 
     Supports mean reduction (optionally weighted per future timestep) and a
     ``"none"`` reduction that returns the per-timestep losses for logging.
@@ -27,9 +24,8 @@ class FeatureReconstructionLoss(nn.Module):
         super().__init__()
         if reduction not in ("mean", "none"):
             raise ValueError(f"Unsupported reduction: {reduction}")
-        # Distance used in feature space. V-JEPA switched from I-JEPA's L2 to
-        # L1 (Bardes et al. 2024, arXiv:2404.08471); both are offered here,
-        # plus a robust Huber variant. Default "l2" keeps the original MSE.
+        # V-JEPA uses L1 (Bardes et al. 2024, arXiv:2404.08471) where I-JEPA
+        # uses L2; both are offered, plus a Huber variant.
         if loss_type not in ("l2", "l1", "smooth_l1"):
             raise ValueError(f"Unsupported loss_type: {loss_type}")
         self.num_future_steps = num_future_steps
@@ -45,10 +41,8 @@ class FeatureReconstructionLoss(nn.Module):
                     f"temporal_weights must have {num_future_steps} elements, "
                     f"got {weights.numel()}"
                 )
-        # Normalise so the weighted mean stays on the same scale as plain MSE.
-        # Guard against a zero (or numerically negligible) sum: dividing by it
-        # would turn the loss into NaN. In that degenerate case we skip the
-        # normalisation and keep the weights as provided.
+        # Normalise so the weighted mean stays on the unweighted scale; a
+        # near-zero sum would produce NaN, so such weights are kept as given.
         total = weights.sum()
         if torch.abs(total) > 1e-8:
             weights = weights / total * num_future_steps
@@ -59,7 +53,7 @@ class FeatureReconstructionLoss(nn.Module):
 
         Args:
             predicted_features: tuple/list of ``num_future_steps`` tensors
-                ``[B, C, H, W]`` as returned by ``FutureState.forward``.
+                ``[B, C, H, W]`` as returned by ``WorldActionModel.predict_future``.
             target_features: tuple/list of tensors with the same shapes,
                 produced by a frozen backbone on the future frames (targets
                 should be detached / require no grad).

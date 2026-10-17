@@ -1,34 +1,12 @@
-"""Frozen / EMA target encoder for the JEPA feature-reconstruction objective.
+"""Frozen or EMA target encoder for the JEPA feature-reconstruction objective.
 
-Background
-----------
-Feature B (merged, #80) added the *prediction* side of the JEPA objective:
-
-* ``FutureState`` predicts future BEV feature maps — a list of
-  ``num_future_steps`` tensors, each ``[B, C, H, W]``.
-* ``losses.FeatureReconstructionLoss`` scores those predictions against
-  *target* feature maps of identical shape. Its own docstring states the
-  targets are "extracted by a frozen copy of the image backbone (no gradient)
-  applied to the future frames at +1.6s, +3.2s, +4.8s and +6.4s".
-
-That **target encoder** was the missing piece. In Joint-Embedding Predictive
-Architectures (I-JEPA / V-JEPA) the targets come from an encoder that is *not*
-trained by backprop from the loss — it is either a **frozen** copy of the
-online encoder or an **exponential-moving-average (EMA)** of it, and its output
-is detached (stop-gradient). This is what prevents representational collapse
-(the predictor cannot win by driving every feature to zero, because the target
-encoder is not pulled along).
-
-This module implements exactly that, supporting BOTH modes @RyotaYamada listed
-in #56 / #13 ("frozen or EMA") so the choice stays a *configuration* rather than
-a hard-coded decision.
-
-Deliberately left open (owned by Zain — 17-06 action item, #13)
----------------------------------------------------------------
-This module does NOT decide: the input frequency (1 Hz / TBD), the predictor
-space (BEV vs feature), the exact future horizons, the JEPA-vs-imitation loss
-weighting, or the data pipeline that supplies the future frames. It only
-provides the collapse-safe target generator those decisions will plug into.
+``WorldActionModel.predict_future`` predicts a list of future feature maps
+``[B, C, H, W]``; ``losses.FeatureReconstructionLoss`` scores them against target
+maps of identical shape produced here. As in I-JEPA / V-JEPA, the target encoder
+is not trained by backprop from the loss: it is a frozen copy or an EMA of the
+online encoder, and its output is detached. This prevents representational
+collapse, since the predictor cannot win by driving features to zero when the
+target is not pulled along.
 """
 
 import copy
@@ -42,7 +20,7 @@ class JepaTargetEncoder(nn.Module):
 
     Wraps a *copy* of an online encoder (e.g. the image backbone, or the
     backbone+fusion path) and runs it without gradients to generate the target
-    feature maps that ``FeatureReconstructionLoss`` compares ``FutureState``'s
+    feature maps that ``FeatureReconstructionLoss`` compares the world model's
     predictions against.
 
     Args:
@@ -68,7 +46,6 @@ class JepaTargetEncoder(nn.Module):
         self.mode = mode
         self.ema_decay = ema_decay
 
-        # A detached, non-trainable mirror of the online encoder.
         self.encoder = copy.deepcopy(encoder)
         self.encoder.requires_grad_(False)
         self.encoder.eval()
@@ -119,7 +96,7 @@ def compute_jepa_loss(predicted_features, future_observations, target_encoder,
             future, future_frames, target_encoder, recon_loss, weight=0.1)
 
     Args:
-        predicted_features: ``FutureState`` output (list of ``[B, C, H, W]``).
+        predicted_features: ``WorldActionModel.predict_future`` output (list of ``[B, C, H, W]``).
         future_observations: inputs for ``target_encoder`` (one per horizon).
         target_encoder: a :class:`JepaTargetEncoder`.
         loss_fn: a :class:`FeatureReconstructionLoss` (or compatible callable).

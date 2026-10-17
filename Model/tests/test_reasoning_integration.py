@@ -1,9 +1,9 @@
-"""AutoE2E ↔ reasoning-branch integration (issue #98, v2).
+"""AutoE2E ↔ reasoning-branch integration.
 
 Mock backbone, no GPU / network. Covers:
     * enable_reasoning=False → byte-identical to the reactive baseline;
     * enable_reasoning=True at init → trajectory unchanged vs baseline up to
-      numerical tolerance (zero-init coupling, the whole point of R7);
+      numerical tolerance (zero-init coupling);
     * train mode returns (trajectory, aux) with aux["reasoning_pred"] a
       HorizonReasoningPrediction carrying 5-horizon logits + confidence;
     * inference mode returns only the trajectory even with reasoning on;

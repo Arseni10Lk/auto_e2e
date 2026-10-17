@@ -12,9 +12,12 @@ from .view_fusion.bevformer_v2_t8 import BEVFormerV2T8TemporalFusion
 class FeatureFusion(nn.Module):
     """Multi-scale feature fusion + cross-view unification.
 
-    Two-stage process:
-      1. Pool and concatenate multi-scale backbone features (per-view)
-      2. Unify across camera views using the selected fusion strategy
+    ``view_fusion_kwargs["architecture"]`` selects the path:
+      - ``"legacy"``: per-view weighted sum of projected backbone stages,
+        then the registry view fusion (``fusion_mode``).
+      - ``"bevformer_v2_t1"`` / ``"bevformer_v2_t8"``: BEVFormer V2 FPN and
+        t1 encoder; T8 additionally fuses eight ordered frame BEVs via
+        :meth:`fuse_temporal_bevs`.
     """
 
     def __init__(self, num_views=8,
@@ -85,8 +88,8 @@ class FeatureFusion(nn.Module):
             nn.Conv2d(embed_dim, embed_dim, kernel_size=1),
         )
 
-        # View fusion strategy (pluggable). Extra kwargs (bev_h, bev_w, pc_range,
-        # image_size, ...) are forwarded to the selected fusion module.
+        # Extra kwargs (bev_h, bev_w, pc_range, image_size, ...) are forwarded
+        # to the selected fusion module.
         self.view_fusion = build_view_fusion(
             fusion_mode, num_views, embed_dim, **view_kwargs
         )
@@ -235,9 +238,8 @@ class FeatureFusion(nn.Module):
         ).sum(dim=0)
         fused_per_view = self.refine(fused_per_view)
 
-        # Unify across views. BEV fusion output spatial size is (bev_h, bev_w).
-        # Geometry (projection operator / geometry_type / image_transform) is
-        # passed straight through — FeatureFusion does not interpret it.
+        # Geometry arguments pass through uninterpreted; output is
+        # [B, C, bev_h, bev_w].
         fused = self.view_fusion(
             fused_per_view, B, V,
             projection=projection,

@@ -32,7 +32,7 @@ def test_speed_converted_kmh_to_ms():
 
 def test_yaw_rate_is_physical_not_degrees():
     # A 2-degree heading sweep over 13 s is a tiny yaw rate. If heading were left
-    # in degrees, yaw_rate would be ~57x larger (and real L2D shards showed 30 rad/s).
+    # in degrees, yaw_rate would be ~57x larger.
     sig = _derive_signals(_states(heading_sweep_deg=2.0, T=130))
     assert abs(float(sig[1:, 2].mean())) < 0.05, "yaw_rate must be radians/s, small"
 

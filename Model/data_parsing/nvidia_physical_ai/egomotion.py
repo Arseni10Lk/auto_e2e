@@ -36,7 +36,6 @@ TRAJECTORY_DIM = _FUTURE_TIMESTEPS * _NUM_TARGET_SIGNALS    # 128
 MIN_ROWS = _HISTORY_TIMESTEPS + _FUTURE_TIMESTEPS + 1  # 129
 
 # The parquet is ~100Hz; downsample to the model's 10Hz.
-# TODO: check sampling integrity (e.g. no missing rows).
 _SOURCE_HZ = 100.0
 _TARGET_HZ = 10.0
 _DOWNSAMPLE_STEP = int(_SOURCE_HZ / _TARGET_HZ)  # keep every 10th row
@@ -50,13 +49,9 @@ def _to_history_signals(state: EgomotionState) -> np.ndarray:
     Returns:
         Float32 array of shape (T, 4): [speed, acceleration, yaw_rate, curvature].
 
-    Channel 2 is YAW_RATE (rad/s), matching the L2D parser. The SDK gives an
-    absolute yaw ANGLE (from the pose quaternion); emitting it here would put a
-    different physical quantity in the same input slot as L2D's yaw_rate, and the
-    merged multi-dataset loader feeds both into one shared ego encoder — so a
-    single weight column would see absolute angle for NVIDIA and angular rate for
-    L2D, corrupting the ego conditioning. Difference the (unwrapped) yaw angle
-    over dt so both datasets agree.
+    Channel 2 is yaw rate (rad/s), matching L2D, because both datasets feed one
+    shared ego encoder. The SDK only gives an absolute yaw angle, so the
+    unwrapped angle is differenced over dt.
     """
     vx = state.velocity[:, 0]
     vy = state.velocity[:, 1]
@@ -112,9 +107,7 @@ def load_egomotion(
         sample_idx: Index into the downsampled (10Hz) sequence to treat as
             the current moment. Must satisfy:
                 _HISTORY_TIMESTEPS <= sample_idx <= len(df) - _FUTURE_TIMESTEPS - 1
-            Defaults to the midpoint of the valid range. During training,
-            pass a random value in the valid range to augment over time
-            within the clip.
+            Defaults to the midpoint of the valid range.
 
     Returns:
         egomotion_history: Float tensor of shape ``(256,)``.

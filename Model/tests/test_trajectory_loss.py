@@ -2,10 +2,6 @@ import hashlib
 import json
 import torch
 import pytest
-import sys
-import os
-
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import training.dataset_policy as dataset_policy
 from model_components.losses import TrajectoryImitationLoss
@@ -106,10 +102,10 @@ class TestTrajectoryImitationLoss:
             TrajectoryImitationLoss(loss_type="l1")
 
     def test_per_signal_normalization_gives_curvature_gradient(self):
-        # Regression for the flat-ADE bug: curvature (signal 1) is ~40x smaller
+        # Curvature (signal 1) is ~40x smaller
         # than accel (signal 0). Without per-signal normalization, a small
         # curvature error sits in SmoothL1's quadratic regime and produces a
-        # near-zero gradient, so the planner never learns curvature. After
+        # near-zero gradient, so the planner never learns curvature. With
         # normalization, the per-element curvature gradient must be comparable
         # in magnitude to the accel gradient for equal-in-std errors.
         loss_fn = TrajectoryImitationLoss(signal_scales=(0.54, 0.014))

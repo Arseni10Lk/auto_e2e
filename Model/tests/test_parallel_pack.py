@@ -1,4 +1,4 @@
-"""Parallel-pack correctness with deduped WM frame pool (#121 §3.4d).
+"""Parallel-pack correctness with deduped WM frame pool.
 
 data_processing's shard packing runs in ProcessPool workers
 (``parallel_pack.pack_sample``): each worker decodes + JPEG-encodes a sample and
@@ -7,7 +7,7 @@ members to the tar and writes each pool frame_id once. These tests pin:
 
   * per-sample members (cam_i.jpg, map.jpg, ego.npy, meta.json, calib.json, and —
     for WM — window_index.json) match a serial reference byte-for-byte; the WM
-    window PIXELS are NOT per-sample anymore (they move to the pool);
+    window pixels live in the pool, not in per-sample members;
   * the pool holds each window frame keyed by its frame_id, and the bytes are
     byte-identical to the serially-encoded window frames — so the loader rebuilds
     identical history_frames/future_frames;
@@ -238,7 +238,7 @@ def test_pack_sample_wm_pool_and_window_index_byte_identical():
     resize, to_pil = transforms.Resize((IMAGE_SIZE, IMAGE_SIZE)), transforms.ToPILImage()
 
     uid, nviews, members, frame_pool = pp.pack_sample(0)
-    # NO per-sample hist_/fut_ members anymore — only window_index.json.
+    # No per-sample hist_/fut_ members, only window_index.json.
     assert not any(k.startswith(("hist_", "fut_")) for k in members)
     assert "window_index.json" in members
     idx = json.loads(members["window_index.json"])
@@ -296,7 +296,7 @@ def test_window_ids_stay_in_episode():
 
 
 # --------------------------------------------------------------------------
-# 5. Manifest flags now derive from window_index.json presence.
+# 5. Manifest flags derive from window_index.json presence.
 # --------------------------------------------------------------------------
 def _derive_flags(ds, dataset_value, n):
     _install_worker_globals(ds, dataset_value, b"{}")
@@ -371,7 +371,7 @@ def test_pack_sample_adds_pose_and_gps_atomically():
 
 
 # --------------------------------------------------------------------------
-# 7. Decode-dedup: row-level workers (#121 §3.4d decode fix)
+# 7. Decode-dedup: row-level workers
 # --------------------------------------------------------------------------
 
 def _install_row_worker_globals(ds, calib_bytes):
@@ -543,7 +543,7 @@ def test_decode_count_is_unique_rows_not_8x():
     for si in range(n):
         for r in ds.window_rows(si):
             all_rows.add(r)
-    naive_total = n * 8   # old path decoded 8 frames × n samples
+    naive_total = n * 8   # 8 window frames per sample without dedup
     assert len(all_rows) < naive_total, (
         f"unique rows {len(all_rows)} should be less than naive {naive_total}")
     print(f"unique rows: {len(all_rows)} vs naive {naive_total} "
@@ -612,7 +612,7 @@ def _simulate_decode_dedup_shard(ds, dataset_value, calib_bytes):
 
 
 def test_end_to_end_dedup_pack_byte_identical_to_legacy():
-    """THE ultimate byte-equality guarantee: the decode-dedup path produces the
+    """Byte-equality guarantee: the decode-dedup path produces the
     SAME per-sample members and SAME pool jpeg bytes as the legacy pack_sample
     path for the same physical frames. (For overlapping frames the pool bytes are
     exactly what legacy pool would have contained.)

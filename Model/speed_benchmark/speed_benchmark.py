@@ -22,19 +22,16 @@ def run_speed_benchmark(backbone, device, batch_size=1, num_views=7,
           f"| views={num_views} | reasoning = '{reasoning}'")
     print(f"{'='*80}\n")
 
-    # Instantiate model. Fusion is always BEV (concat / cross_attn and the
-    # fusion_mode knob were removed); nav-map is a separate map_input branch, not
-    # a camera view. Small BEV grid keeps the benchmark fast.
+    # The nav map is a separate map_input branch, not a camera view. A small BEV
+    # grid keeps the benchmark fast.
     #
-    # ``reasoning`` optionally enables the reasoning branch (#98) so its inference
-    # cost is measured explicitly. The branch runs at 1 Hz in deployment, so the
-    # per-forward cost here is an upper bound on its real-time budget. The value
-    # is BOTH the result label and the planner coupling mode: "off" (disabled),
-    # "pooled_latent", or "horizon_cross_attention".
+    # ``reasoning`` is both the result label and the planner coupling mode: "off",
+    # "pooled_latent", or "horizon_cross_attention". The branch runs at 1 Hz in
+    # deployment, so the per-forward cost here is an upper bound on its budget.
     #
     # ``enable_world_model`` measures the Combined (reactive + world model)
-    # forward cost (#102): the WM updates the recurrent visual history each
-    # step, so it is reset before warm-up and before timing.
+    # forward cost. The WM updates the recurrent visual history each step, so it
+    # is reset before warm-up and before timing.
     extra_kwargs = {}
     if reasoning != "off":
         extra_kwargs = dict(enable_reasoning=True, reasoning_mode=reasoning)
@@ -45,24 +42,18 @@ def run_speed_benchmark(backbone, device, batch_size=1, num_views=7,
     model = model.to(device)
     model.eval()
 
-    # Visual Scene Input: [batch, num_views, channels, height, width]
     visual_tiles = torch.randn(batch_size, num_views, 3, 256, 256).to(device)
-    # Map Input: [batch, channels, height, width]
     map_input = torch.randn(batch_size, 3, 256, 256).to(device)
-    # Visual History Input: [batch, 896]
     visual_history = torch.randn(batch_size, 896).to(device)
-    # Egomotion History Input: [batch, 256]
     egomotion_history = torch.randn(batch_size, 256).to(device)
 
-    # Geometry: a pinhole projection operator (the real-calibration path; there
-    # is no camera_params matrix argument on forward).
     projection = PinholeProjection(torch.randn(batch_size, num_views, 3, 4).to(device))
 
     def _forward():
         return model(visual_tiles, map_input, visual_history, egomotion_history,
                      projection=projection, geometry_type="pinhole", mode="infer")
 
-    # 1. Warm-up Phase (GPU kernel compilation and cache warming)
+    # Warm-up covers GPU kernel compilation and cache warming.
     num_warmup = 30 if device.type == 'cuda' else 5
     print(f"Warming up ({num_warmup} iterations)...")
     
@@ -73,7 +64,6 @@ def run_speed_benchmark(backbone, device, batch_size=1, num_views=7,
         for _ in range(num_warmup):
             _ = _forward()
 
-    # 2. Benchmark Model
     num_iters = 100 if device.type == 'cuda' else 10
     print(f"Benchmarking {model_type} Model ({num_iters} iterations)...")
 
@@ -98,7 +88,6 @@ def run_speed_benchmark(backbone, device, batch_size=1, num_views=7,
 
     latencies = np.array(latencies)
 
-    # 3. Calculate and Print Metrics
     avg_fps = 1000 / np.mean(latencies)
     avg_latency = np.mean(latencies)
     p50_latency = np.percentile(latencies, 50)
@@ -112,7 +101,6 @@ def run_speed_benchmark(backbone, device, batch_size=1, num_views=7,
         peak_allocated = 0.0
         peak_reserved = 0.0
 
-    # Count model parameters
     total_params = sum(p.numel() for p in model.parameters())
     trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
 
@@ -210,7 +198,7 @@ def main():
 
     all_results = []
 
-    # Test all registered backbones (BEV is the only fusion after the refactor).
+    # All registered backbones.
     backbones = ["swin_v2_tiny", "conv_next_v2_tiny"]
     batch_sizes = [1, 2, 4]
 
@@ -223,9 +211,8 @@ def main():
                 all_results.append(result)
                 print()
 
-    # Reasoning branch (#98): measure the added cost of each coupling mode
-    # explicitly, on the default backbone at batch 1 (its deployment operating
-    # point — the branch runs at 1 Hz).
+    # Reasoning coupling modes are measured on the default backbone at batch 1,
+    # the branch's deployment operating point.
     reasoning_variants = ["pooled_latent", "horizon_cross_attention"]
     for reasoning in reasoning_variants:
         if torch.cuda.is_available():
@@ -235,10 +222,8 @@ def main():
         all_results.append(result)
         print()
 
-    # Save structured results
     save_results_json(all_results, device)
 
-    # Generate and print the updated markdown table
     print("\n" + "="*80)
     print("Markdown Table for BENCHMARKS.md:")
     print("="*80 + "\n")

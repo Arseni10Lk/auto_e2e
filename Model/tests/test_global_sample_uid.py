@@ -1,9 +1,9 @@
-"""Global, partition-independent sample_uid (#121 Phase 1, §3.1).
+"""Global, partition-independent sample_uid.
 
-The whole episode-range fan-out rests on ONE invariant: the same physical frame
-gets the same `sample_uid` no matter which episode/clip subset a given pod loaded.
-Positional `f"s{si:08d}"` broke this (it renumbers per subset); the new uid is
-built from (episode_index, frame_index) / (clip_uuid, sample_idx).
+The episode-range fan-out relies on the same physical frame getting the same
+`sample_uid` no matter which episode/clip subset a given pod loaded. A positional
+index would renumber per subset, so the uid is built from
+(episode_index, frame_index) / (clip_uuid, sample_idx).
 
 These tests exercise the uid/split logic without decoding video: they drive the
 parser's `sample_uid`/`split_group_uid` against a stubbed `_samples` /

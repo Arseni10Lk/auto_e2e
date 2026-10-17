@@ -52,7 +52,7 @@ __all__ = [
     "OSMWayRecord",
     "build_l2d_osm_graph_snapshot",
     "encode_l2d_osm_graph_snapshot",
-    # World Model 1 Hz sequential windows (#16, enables JEPA #13)
+    # World Model 1 Hz sequential windows
     "build_windows",
     "window_offsets",
     "required_margins",

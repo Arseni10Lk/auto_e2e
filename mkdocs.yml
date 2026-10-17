@@ -1,6 +1,6 @@
 site_name: AutoE2E
 theme:
-  name: material  # A beautiful, modern documentation theme
+  name: material
 
 nav:
   - Home: index.md

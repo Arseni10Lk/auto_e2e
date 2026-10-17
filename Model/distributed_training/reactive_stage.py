@@ -1384,6 +1384,7 @@ def _extend_sample_stream_sha256(
 def _batch_sample_uids(raw_batch: Mapping[str, Any]) -> tuple[str, ...]:
     """Read the ordered sample identities from one collated batch."""
     raw_uids = raw_batch.get("sample_uid")
+    resolved: tuple[str, ...]
     if isinstance(raw_uids, str):
         resolved = (raw_uids,)
     elif isinstance(raw_uids, Sequence):
@@ -4608,7 +4609,7 @@ def train_loop_per_worker(config: dict[str, Any]) -> None:
                     else None
                 ),
                 required_checkpoint_epoch=(
-                    int(config.get("parent_checkpoint_epoch"))
+                    int(config["parent_checkpoint_epoch"])
                     if int(config.get("parent_checkpoint_epoch", 0)) > 0
                     else None
                 ),

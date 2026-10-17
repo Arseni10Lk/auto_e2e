@@ -132,7 +132,7 @@ output "project_name" {
   value = aws_codebuild_project.images.name
 }
 
-# --- Flyte Register (VPC内, flyteadminにアクセス可能) ---
+# --- Flyte Register (runs in the VPC so it can reach flyteadmin) ---
 
 resource "aws_security_group" "flyte_register" {
   name_prefix = "${var.cluster_name}-flyte-register-"

@@ -306,17 +306,9 @@ func TestPaginate(t *testing.T) {
 	}
 }
 
-// TestPaginate_HugeOffsetDoesNotPanic is a regression test for an integer
-// overflow: paginate computes end := offset + limit BEFORE clamping offset to
-// total, so an offset near MaxInt overflows end to a negative value and
-// items[offset:end] panics with "slice bounds out of range". The offset is
-// remotely attacker-controlled: handler.parsePagination accepts any
-// non-negative int (?offset=9223372036854775807 parses fine on 64-bit), so
-// GET /api/v1/datasets/l2d/shards?offset=9223372036854775807 panics per
-// request (recovered by chi middleware.Recoverer into a 500, with a stack
-// trace logged). Correct behavior: return an empty page with More=false.
-// This test FAILS until the production fix lands (clamp offset before
-// computing end, and guard end < offset for overflow).
+// TestPaginate_HugeOffsetDoesNotPanic checks that a client-supplied offset
+// near MaxInt cannot overflow end := offset + limit and panic on the slice.
+// It must return an empty page with More=false.
 func TestPaginate_HugeOffsetDoesNotPanic(t *testing.T) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -628,7 +620,7 @@ func TestGetSampleDetailRejectsNonFiniteEgoPayload(t *testing.T) {
 // TestCountingReader_TarDataOffsets validates the invariant ListSamples relies
 // on: after tar.Reader.Next() the counting reader's n is exactly the byte
 // offset of the member's data within the tar stream, so raw[n:n+size]
-// reproduces the member content (the basis for Phase 2 range-GET extraction).
+// reproduces the member content (the basis for range-GET extraction).
 func TestCountingReader_TarDataOffsets(t *testing.T) {
 	files := []struct {
 		name string

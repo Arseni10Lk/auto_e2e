@@ -9,13 +9,11 @@ Covers:
   - MAP_ENCODER_REGISTRY and MAP_FUSION_REGISTRY
   - AutoE2E navigation integration: validity-gated map/route inputs are encoded
     only by the Reactive branch, and NavigationEncoder / MapBEVFusion
-    MapBEVFusion parameters receive gradients
+    parameters receive gradients
 """
 
 import pytest
 import torch
-import sys
-sys.path.append('..')
 
 from model_components.map_encoder import (
     MAP_ENCODER_REGISTRY,
@@ -325,9 +323,8 @@ class TestMapRegistries:
 class TestAutoE2EMapIntegration:
     """End-to-end tests verifying the map branch is correctly wired into AutoE2E.
 
-    Uses the build_mock_model fixture from conftest — it already handles patching
-    Backbone with MockBackbone internally, so there's no need to import conftest
-    directly (pytest makes conftest a plugin, not an importable module).
+    Uses the ``build_mock_model`` fixture from conftest, which patches in the mock
+    backbone.
     """
 
     def _make_model(self, build_mock_model, device, map_fusion_mode="residual"):
@@ -588,26 +585,28 @@ class TestAutoE2EMapIntegration:
         route_b = torch.ones(2, 2, 256, 256, device=device)
         valid = torch.ones(2, dtype=torch.bool, device=device)
 
-        trajectory_a, aux_a = model(
-            visual,
-            map_context,
-            visual_history,
-            ego,
-            route_mask=route_a,
-            map_valid=valid,
-            route_valid=valid,
-            mode="train",
-        )
-        trajectory_b, aux_b = model(
-            visual,
-            map_context,
-            visual_history,
-            ego,
-            route_mask=route_b,
-            map_valid=valid,
-            route_valid=valid,
-            mode="train",
-        )
+        # cuDNN RNN cannot run backward in eval mode.
+        with torch.backends.cudnn.flags(enabled=False):
+            trajectory_a, aux_a = model(
+                visual,
+                map_context,
+                visual_history,
+                ego,
+                route_mask=route_a,
+                map_valid=valid,
+                route_valid=valid,
+                mode="train",
+            )
+            trajectory_b, aux_b = model(
+                visual,
+                map_context,
+                visual_history,
+                ego,
+                route_mask=route_b,
+                map_valid=valid,
+                route_valid=valid,
+                mode="train",
+            )
 
         assert not torch.allclose(trajectory_a, trajectory_b)
         assert torch.allclose(

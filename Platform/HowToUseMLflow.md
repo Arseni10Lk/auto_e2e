@@ -17,7 +17,7 @@ platform. Organized by **what you want to do**.
 When you open MLflow you land on the **Experiments** page. Left sidebar lists
 experiments; the main panel shows the runs of the selected experiment.
 
-The three experiments that matter:
+The experiments that matter:
 
 | Experiment | Written by | Contains |
 |------------|-----------|----------|
@@ -25,6 +25,7 @@ The three experiments that matter:
 | **`offline-rl`** | `evaluate_rl_policy` | IQL-refined policies + their eval metrics |
 | **`reactive-training`** | Reactive Ray training task | Multi-task epoch history and checkpoint lineage |
 | **`reactive-bev-evaluation`** | `evaluate_reactive_bev_checkpoint` | Class-level BEV validation and registered BEV checkpoints |
+| **`reactive-policy-evaluation`** | `publish_reactive_kitscenes_evaluation` | Reactive KITScenes policy evaluation reports |
 | `Default` | — | empty / unused |
 
 There is also a **Models** tab (top nav) for the Model Registry
@@ -53,7 +54,7 @@ Each evaluation run logs a consistent schema, so runs are directly comparable:
 ```
 data/dataset              e.g. yaak-ai/L2D
 model/backbone            e.g. swin_v2_tiny
-model/fusion_mode         e.g. concat
+model/fusion_mode         always bev
 train/epochs, train/batch_size, train/lr, train/weight_decay, train/amp
 train/final_loss
 rl/method, rl/tau, rl/beta, rl/epochs            (offline-rl runs only)
@@ -100,14 +101,14 @@ model/            the checkpoint (.pt), also registered in the Model Registry
 
 ## Use case B — "Compare a few candidate runs side by side"
 
-**You are**: comparing backbones, fusion modes, or hyperparameters.
+**You are**: comparing backbones or hyperparameters.
 
 1. In the experiment run table, tick the **checkboxes** of 2–5 runs.
 2. Click **Compare**.
 3. The compare view shows:
    - A **parameter table** (differing params highlighted) — instantly see what changed.
    - **Metric charts** — `train/loss` curves overlaid, plus bar charts for `eval/ade` / `eval/fde`.
-4. Use this to answer "did `bev` fusion beat `concat`?" or "did a lower `lr` help?".
+4. Use this to answer "did `conv_next_v2_tiny` beat `swin_v2_tiny`?" or "did a lower `lr` help?".
 
 ---
 
@@ -119,7 +120,7 @@ model/            the checkpoint (.pt), also registered in the Model Registry
    ```
    params.`model/backbone` = "swin_v2_tiny"
    params.`data/dataset` = "yaak-ai/L2D" and metrics.`eval/ade` < 2.0
-   params.`model/fusion_mode` = "bev"
+   params.`train/lr` = "0.0001"
    ```
    (Backtick the keys that contain `/`.)
 2. Sort and column-pick as in Use case A.
@@ -147,7 +148,7 @@ model/            the checkpoint (.pt), also registered in the Model Registry
 **You are**: validating the RL refinement step.
 
 1. Note the IL run's `eval/ade` in the **`imitation-learning`** experiment.
-2. Open the matching run in **`offline-rl`** (same backbone/fusion/dataset; the
+2. Open the matching run in **`offline-rl`** (same backbone/dataset; the
    `base/*` or `ctx/*` params link them).
 3. Compare `eval/ade` / `eval/fde`: a lower value in the offline-rl run means IQL
    refinement helped. (With only a few epochs the absolute numbers are high; what
@@ -218,8 +219,6 @@ model/            the checkpoint (.pt), also registered in the Model Registry
 - **Compare is your friend** for ablations — select runs, hit Compare.
 - **Provenance is built in**: `ctx/*` params tie each run to its Flyte execution and
   Docker image, so any result is fully traceable and reproducible.
-- **Stale experiments were removed**: only `Default`, `imitation-learning`, and
-  `offline-rl` remain; old `auto-e2e/*` and `test-*` experiments were deleted.
 
 ---
 

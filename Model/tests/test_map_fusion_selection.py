@@ -1,9 +1,8 @@
 """``map_fusion_mode`` must reach the model and survive into the checkpoint.
 
-The failure this guards against is silent: before #168, ``train_il`` accepted no
-fusion argument and ``AutoE2E`` defaulted to ``residual``, so a run intended as
-an attention-fusion experiment trained residual and logged nothing to say so.
-A regression here would not raise — it would quietly produce the wrong model.
+The failure this guards against is silent: if ``train_il`` dropped the fusion
+argument, ``AutoE2E`` would default to ``residual`` and an attention-fusion run
+would train residual without raising or logging anything.
 """
 
 from __future__ import annotations
@@ -85,7 +84,7 @@ class TestSurvivesTheCheckpoint:
             "embed_dim": 256,
             "num_views": 6,
             "is_pretrained": False,
-            # A key the current constructor no longer takes; _model_kwargs must
+            # A key the constructor does not accept; _model_kwargs must
             # drop it without taking map_fusion_mode with it.
             "fusion_mode": "bev",
         }

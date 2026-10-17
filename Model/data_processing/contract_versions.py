@@ -1,16 +1,16 @@
-"""Single source of truth for the data-pipeline CONTRACT versions (#121 §3.4c).
+"""Single source of truth for the data-pipeline contract versions.
 
 These version strings are the only sanctioned way to invalidate the Flyte task
-cache / reasoning-label S3 cache. Each is defined here ONCE and imported wherever
-it is needed — never written as an inline literal — so a `grep` over this file
-shows every cache-invalidating knob and its blast radius.
+cache and the reasoning-label S3 cache. Each is defined here once and imported
+wherever it is needed, never written as an inline literal, so this file shows
+every cache-invalidating knob.
 
-Bump a version ONLY in a reviewed change, with a one-line reason, when the thing
-it names actually changes. The stability test asserts these are single constants
-and that no runtime/tuning knob (episode count, num_workers, resource limits, …)
-ever enters a cached task's input signature.
+Bump a version only when the thing it names actually changes. The stability
+test asserts these are single constants and that no runtime/tuning knob
+(episode count, num_workers, resource limits, …) enters a cached task's input
+signature.
 
-| Version              | Bump ONLY when…                                        | Re-runs         |
+| Version              | Bump only when…                                        | Re-runs         |
 |----------------------|--------------------------------------------------------|-----------------|
 | UID_SCHEMA_VERSION   | the sample_uid / split_group_uid FORMAT changes        | label + pack    |
 | PARSER_VERSION       | sample ENUMERATION or per-sample fields change         | ingest+label+pack|
@@ -19,8 +19,8 @@ ever enters a cached task's input signature.
 | REASONING_LABEL_POLICY_VERSION | the reasoning sample selection changes     | label + pack    |
 
 Source revision (HF commit), teacher model revision, and the prompt body hash are
-NOT constants here — they are resolved at run time (from HF / teacher config /
-prompt text) and threaded through as inputs; see DatasetSnapshot (§3.4a).
+not constants here; they are resolved at run time (from HF / teacher config /
+prompt text) and threaded through as inputs; see DatasetSnapshot.
 
 nuPlan BEV class semantics are versioned separately by
 `BEV_SEGMENTATION_TAXONOMY_VERSION` and the nuPlan pack task cache. A semantic
@@ -30,7 +30,7 @@ target change must bump both without changing the stable NPZ encoding version.
 from __future__ import annotations
 
 # Format of sample_uid ("l2d-v1-e…-f…") and split_group_uid. Bump if the id
-# STRING format changes (not when new episodes are added).
+# string format changes (not when new episodes are added).
 UID_SCHEMA_VERSION = "v1"
 
 # Sample enumeration + per-sample field contract of the parsers
@@ -41,15 +41,15 @@ PARSER_VERSION = "v3"
 # Packed WebDataset shard member layout (cam_i.jpg / map.jpg / hist_*/fut_* /
 # ego.npy / meta.json / calib.json / reasoning.json). Bump if the member set,
 # names, or encoding change.
-# v2 (dedup pack, #121 §3.4d): added `window_index.json` per-sample member and
-# a SIBLING `pool/{frame_id}.jpg` directory replacing legacy `hist_*/fut_*` tar
-# members. Loader now requires pool/ when window_index.json is present.
+# v2: added `window_index.json` per-sample member and a sibling
+# `pool/{frame_id}.jpg` directory replacing `hist_*/fut_*` tar members. The
+# loader requires pool/ when window_index.json is present.
 # v3: added pose.npy (absolute lat/lon/heading/timestamp) and gps.npy (current +
 # 64 future lat/lon points) for datasets with geospatial source fields.
 # v4: emits dataset-level geo paths, sample-pose parquet, and privacy-filtered
 # heatmaps for every GPS-capable parser, including KITScenes partitions.
 # v5: KITScenes stores lossless semantic-map and selected-route tensors plus
-# scene-level canonical navigation vectors; it no longer stores map.jpg.
+# scene-level canonical navigation vectors instead of map.jpg.
 # v6: KITScenes adds the loss-only route_supervision.npz member derived from the
 # canonical selected lane sequence.
 # v7: route_supervision.npz also stores the loss-only drivable outside-distance
@@ -94,8 +94,7 @@ REASONING_LABEL_POLICY_VERSION = "v2"
 
 
 def contract_versions() -> dict:
-    """All contract versions as one dict — used in the DatasetSnapshot / cache key
-    and asserted single-sourced by the stability test."""
+    """All contract versions as one dict, used in the DatasetSnapshot cache key."""
     return {
         "uid_schema_version": UID_SCHEMA_VERSION,
         "parser_version": PARSER_VERSION,

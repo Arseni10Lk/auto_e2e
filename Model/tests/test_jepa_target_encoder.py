@@ -1,19 +1,17 @@
 """Unit tests for the JEPA target encoder (frozen / EMA, stop-gradient).
 
 Verifies the collapse-safety guarantees of the target branch and that it
-plugs into the already-merged ``FutureState`` + ``FeatureReconstructionLoss``:
+plugs into ``FeatureReconstructionLoss``:
   - the target encoder never carries gradient (frozen params, detached output),
   - "frozen" mode is a stable deep copy independent of the online encoder,
   - "ema" mode moves the target toward the online encoder on ``update()``,
-  - ``compute_jepa_loss`` is differentiable w.r.t. the prediction ONLY,
-  - end-to-end with the real FutureState world-model head.
+  - ``compute_jepa_loss`` is differentiable w.r.t. the prediction ONLY.
 """
 
 import pytest
 import torch
 import torch.nn as nn
 
-from model_components.future_state import FutureState
 from model_components.jepa_target_encoder import (
     JepaTargetEncoder,
     compute_jepa_loss,
@@ -140,31 +138,3 @@ def test_gradient_flows_to_prediction_only(device):
         "prediction must receive gradient"
     assert all(p.grad is None for p in target.parameters()), \
         "target encoder must NOT receive gradient (stop-gradient)"
-
-
-def test_end_to_end_with_future_state(device):
-    """FutureState (predictor) + JepaTargetEncoder (targets) + recon loss.
-
-    Mirrors the intended training step: the world-model head predicts future
-    features, targets come from the frozen/EMA encoder on future observations,
-    and the JEPA loss back-props into FutureState but never into the target."""
-    torch.manual_seed(0)
-    future_state = FutureState(embed_dim=EMBED_DIM,
-                               ego_hidden_dim=EMBED_DIM).to(device)
-    target = JepaTargetEncoder(_TinyEncoder(), mode="ema").to(device)
-    loss_fn = FeatureReconstructionLoss(num_future_steps=NUM_FUTURE).to(device)
-
-    fused = torch.randn(2, EMBED_DIM, 8, 8, device=device)
-    ego_hidden = torch.randn(2, EMBED_DIM, device=device)
-    predicted = future_state(fused, ego_hidden)
-    assert len(predicted) == NUM_FUTURE
-
-    future_obs = _future_obs(2, device)
-    loss = compute_jepa_loss(predicted, future_obs, target, loss_fn, weight=0.1)
-    assert loss.ndim == 0 and torch.isfinite(loss)
-
-    loss.backward()
-    assert any(p.grad is not None for p in future_state.parameters()), \
-        "FutureState must receive gradient from the JEPA loss"
-    assert all(p.grad is None for p in target.parameters()), \
-        "target encoder must stay gradient-free"

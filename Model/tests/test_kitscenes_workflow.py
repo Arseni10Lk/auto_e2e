@@ -164,7 +164,6 @@ def test_direct_test_pack_keeps_raw_data_in_the_same_task(monkeypatch):
         "world_model": False,
         "reasoning_labels": None,
         "group_ids": ["scene-a"],
-        "expected_reasoning_label_count": None,
         "sample_limit": 0,
         "source_split": "test",
         "data_role": "benchmark",
@@ -876,65 +875,6 @@ def test_row_decode_initializer_matches_worker_abi():
     ) in source
 
 
-def test_recovery_pack_maps_explicit_unbounded_sample_limits():
-    tree = ast.parse(
-        inspect.getsource(
-            workflows._map_recovered_kitscenes_artifacts.task_function
-        )
-    )
-    sample_limits = next(
-        node
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Assign)
-        and any(
-            isinstance(target, ast.Name)
-            and target.id == "sample_limits"
-            for target in node.targets
-        )
-    )
-    assert isinstance(sample_limits.value, ast.BinOp)
-    assert ast.literal_eval(sample_limits.value.left) == [0]
-    assert isinstance(sample_limits.value.op, ast.Mult)
-
-    pack_call = next(
-        node
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Name)
-        and node.func.id == "pack"
-    )
-    keywords = {keyword.arg: keyword.value for keyword in pack_call.keywords}
-    assert isinstance(keywords["sample_limit"], ast.Name)
-    assert keywords["sample_limit"].id == "sample_limits"
-
-
-def test_recovery_pack_fixes_training_role_before_map_compilation():
-    tree = ast.parse(
-        inspect.getsource(
-            workflows._map_recovered_kitscenes_artifacts.task_function
-        )
-    )
-    data_processing_partials = [
-        node
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Attribute)
-        and node.func.attr == "partial"
-        and node.args
-        and isinstance(node.args[0], ast.Name)
-        and node.args[0].id == "data_processing"
-    ]
-
-    assert len(data_processing_partials) == 2
-    for partial_call in data_processing_partials:
-        keywords = {
-            keyword.arg: keyword.value
-            for keyword in partial_call.keywords
-        }
-        assert ast.literal_eval(keywords["source_split"]) == "train"
-        assert ast.literal_eval(keywords["data_role"]) == "training"
-
-
 @pytest.mark.parametrize(
     (
         "dataset",
@@ -1108,8 +1048,6 @@ def test_loader_wiring_avoids_training_peek_and_bounds_eval_prefetch():
     (
         "buildspec-register.yml",
         "buildspec-launch-fullrun.yml",
-        "buildspec-launch-recovery.yml",
-        "buildspec-launch-reconstruction-audit.yml",
     ),
 )
 def test_remote_registration_buildspecs_pin_runtime_contracts(buildspec_name):
@@ -1159,69 +1097,7 @@ def test_all_flyte_runtime_installations_pin_the_shared_sdk_version():
     assert runtime_files
 
 
-def test_recovery_launcher_requires_audited_artifacts_and_skips_source_stages():
-    buildspec = (
-        _REPO_ROOT / "Platform" / "buildspec-launch-recovery.yml"
-    ).read_text()
-
-    assert "shell: bash" in buildspec
-    assert 'test -n "${ARTIFACT_SET_SHA256}"' in buildspec
-    assert "--recovery_manifest" in buildspec
-    assert "--artifact_set_sha256" in buildspec
-    assert "DATASET_VERSION: v3.5" in buildspec
-    assert 'EPOCHS: "20"' in buildspec
-    assert (
-        "TRAINING_OBJECTIVE_VERSION: "
-        "rollout_aligned_planner_v1"
-    ) in buildspec
-    assert 'ENABLE_JUNCTION_SAMPLING: "false"' in buildspec
-    assert 'ENABLE_ROUTE_CONSISTENCY: "false"' in buildspec
-    assert 'ALLOW_RESUME_POLICY_TRANSITION: "false"' in buildspec
-    assert "--max_partitions" in buildspec
-    assert "--validation_scope" in buildspec
-    assert "--training_objective_version" in buildspec
-    assert "--enable_junction_sampling" in buildspec
-    assert "--enable_route_consistency" in buildspec
-    assert "--allow_resume_policy_transition" in buildspec
-    assert "--no_allow_resume_policy_transition" in buildspec
-    assert "--route_consistency_weight" in buildspec
-    assert 'RECONSTRUCTION_AUDIT_URI: ""' in buildspec
-    assert "--reconstruction_audit" in buildspec
-    assert "--reconstruction_audit_decision" in buildspec
-    assert "--reconstruction_audit_rationale" in buildspec
-    assert "wf_recovered_kitscenes_full_run" in buildspec
-    assert "wf_sharded_full_run" not in buildspec
-    assert "--reasoning_teacher" not in buildspec
-    assert "--enable_route_conditioning" in buildspec
-    assert "--no_enable_route_conditioning" in buildspec
-    assert (
-        '--enable_route_conditioning "${ENABLE_ROUTE_CONDITIONING}"'
-        not in buildspec
-    )
-
-
-def test_reconstruction_audit_launcher_defaults_to_smoke_subset():
-    buildspec = (
-        _REPO_ROOT
-        / "Platform"
-        / "buildspec-launch-reconstruction-audit.yml"
-    ).read_text()
-
-    assert "shell: bash" in buildspec
-    assert 'MAX_PARTITIONS: "10"' in buildspec
-    assert "VALIDATION_SCOPE: subset" in buildspec
-    assert 'test -n "${ARTIFACT_SET_SHA256}"' in buildspec
-    assert 'test -n "${AUDIT_CODE_REVISION}"' in buildspec
-    assert (
-        "wf_audit_recovered_kitscenes_target_reconstruction"
-        in buildspec
-    )
-    assert "--audit_code_revision" in buildspec
-    assert "--max_partitions" in buildspec
-    assert "--validation_scope" in buildspec
-
-
-def test_overlay_launcher_guards_selected_recovery_checkpoints():
+def test_overlay_launcher_wires_selected_checkpoints():
     buildspec = (
         _REPO_ROOT / "Platform" / "buildspec-launch-overlay.yml"
     ).read_text()
@@ -1238,7 +1114,6 @@ def test_overlay_launcher_guards_selected_recovery_checkpoints():
         "SELECTED_CHECKPOINT_EPOCH",
     ):
         assert variable in buildspec
-    assert "--allow-running-recovery" in buildspec
     assert "wf_publish_selected_checkpoint_overlays" in buildspec
     assert '--mlflow_run_id "${SELECTED_MLFLOW_RUN_ID}"' in buildspec
     assert '--checkpoint_uri "${SELECTED_CHECKPOINT_URI}"' in buildspec

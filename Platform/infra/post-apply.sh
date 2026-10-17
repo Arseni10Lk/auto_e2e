@@ -1,13 +1,17 @@
 #!/bin/bash
 # Run after `terraform apply` completes successfully.
-# Sets up kubeconfig, applies GPU capacity and queue manifests, builds and
+# Sets up kubeconfig, applies the default StorageClass, creates the mlflow
+# database on RDS, applies GPU capacity and queue manifests, builds and
 # pushes the training image, and runs a GPU smoke-test Pod.
+# Run from Platform/infra (it reads `terraform output rds_endpoint`).
 #
 # All account/region specifics come from env or are resolved at runtime, so
 # nothing account-specific is baked in:
 #   AWS_PROFILE=myprofile AWS_REGION=us-west-2 ./post-apply.sh
+# The RDS master secret defaults to ${EKS_CLUSTER}/rds/master-${ENVIRONMENT}
+# (ENVIRONMENT defaults to dev); override with RDS_SECRET_ID.
 #
-# Uses Finch for the image build (Docker Desktop requires org sign-in here).
+# Builds the image with Finch by default (set CONTAINER_CLI=docker to override).
 
 set -euo pipefail
 
@@ -22,6 +26,40 @@ ACCOUNT=$(aws sts get-caller-identity \
 
 echo "=== 1. Update kubeconfig ==="
 aws eks update-kubeconfig --name "$CLUSTER" --region "$REGION" --profile "$PROFILE"
+
+echo "=== 1a. Apply default StorageClass (EKS Auto Mode has none) ==="
+kubectl apply -f ../k8s/storage-class.yaml
+
+echo "=== 1b. Create mlflow database on RDS (if not exists) ==="
+# The RDS module creates only db_name="flyteadmin"; the MLflow Helm release
+# expects a database named "mlflow".
+RDS_ENDPOINT=$(terraform output -raw rds_endpoint)
+RDS_HOST="${RDS_ENDPOINT%%:*}"
+RDS_SECRET_ID="${RDS_SECRET_ID:-${CLUSTER}/rds/master-${ENVIRONMENT:-dev}}"
+DB_CREDS_JSON=$(aws secretsmanager get-secret-value \
+  --secret-id "$RDS_SECRET_ID" \
+  --region "$REGION" \
+  --profile "$PROFILE" \
+  --query SecretString \
+  --output text)
+DB_USER=$(printf '%s' "$DB_CREDS_JSON" | \
+  python3 -c 'import json, sys; print(json.load(sys.stdin)["username"])')
+DB_PASS=$(printf '%s' "$DB_CREDS_JSON" | \
+  python3 -c 'import json, sys; print(json.load(sys.stdin)["password"])')
+kubectl delete --ignore-not-found --wait=true \
+  --namespace flyte \
+  pod/pg-init-mlflow
+# psql -c cannot mix SQL with \gexec, so the statement is sent on stdin.
+printf '%s\n' \
+  "SELECT 'CREATE DATABASE mlflow' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'mlflow')\\gexec" | \
+  kubectl run pg-init-mlflow \
+    --rm -i --restart=Never \
+    --namespace flyte \
+    --image=postgres:16-alpine \
+    --env="PGPASSWORD=$DB_PASS" \
+    -- psql -v ON_ERROR_STOP=1 \
+      -h "$RDS_HOST" -U "$DB_USER" -d flyteadmin
+unset DB_CREDS_JSON DB_PASS
 
 echo "=== 2. Verify cluster access ==="
 kubectl get nodepools

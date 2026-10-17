@@ -50,8 +50,8 @@ Both measurements used
 `Model/speed_benchmark/bevformer_v2_memory_benchmark.py` with the official
 checkpoint and include trajectory, BEV segmentation, and route reconstruction
 heads in the backward pass. This historical 256x256 model has 50,180,546
-parameters after removal of the non-official four-value FPN scale. The
-benchmark JSON now reports `parameter_count` from the live model. The T8
+parameters. The benchmark JSON reports `parameter_count` from the live model.
+The T8
 measurement is an upper bound for production memory and does not represent
 production throughput because it leaves the camera BEV trainable.
 

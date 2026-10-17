@@ -32,6 +32,7 @@ import hashlib
 import io
 import json
 import math
+import os
 import random
 import re
 from collections import deque
@@ -65,14 +66,14 @@ _TRANSFORM = transforms.Compose([
     transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
 ])
 
-# Camera frames are keyed "cam_<i>.jpg"; the nav-map is "map.jpg". The map MUST
-# NOT be picked up as a camera view — matching cam_ explicitly (not any ".jpg")
-# keeps V correct and stops the map being double-counted in the BEV projection.
+# Camera frames are keyed "cam_<i>.jpg"; the nav-map is "map.jpg". Matching cam_
+# explicitly keeps the map out of the camera views, so V stays correct and the
+# map is not projected into BEV.
 _CAM_KEY_RE = re.compile(r"^cam_\d+\.jpg$")
 _BEV_HIST_KEY_RE = re.compile(r"^bev_hist_(\d+)_cam_(\d+)\.jpg$")
 _KITSCENES_HISTORY_FRAME_ID_RE = re.compile(r"-r(\d+)-c(\d+)$")
 _BEV_HISTORY_INDEX_MEMBER = "bev_history_index.json"
-# World-Model window frames: hist_<t>_cam_<v>.jpg / fut_<f>_cam_<v>.jpg (#13).
+# World-Model window frames: hist_<t>_cam_<v>.jpg / fut_<f>_cam_<v>.jpg.
 _HIST_KEY_RE = re.compile(r"^hist_(\d+)_cam_(\d+)\.jpg$")
 _FUT_KEY_RE = re.compile(r"^fut_(\d+)_cam_(\d+)\.jpg$")
 
@@ -194,24 +195,25 @@ def packed_sample_tar_paths(
                     raise ValueError(
                         "rank shard inventory must be an object"
                     )
-                selected_shards = rank_inventory.get("shard_names")
+                rank_shards = rank_inventory.get("shard_names")
                 if (
                     rank_inventory.get("schema_version")
                     != "reactive_rank_shards_v1"
                     or rank_inventory.get("manifest_sha256")
                     != hashlib.sha256(manifest_bytes).hexdigest()
-                    or not isinstance(selected_shards, list)
+                    or not isinstance(rank_shards, list)
                     or any(
                         not isinstance(name, str)
                         or name not in configured_shards
-                        for name in selected_shards
+                        for name in rank_shards
                     )
-                    or not selected_shards
-                    or len(set(selected_shards)) != len(selected_shards)
+                    or not rank_shards
+                    or len(set(rank_shards)) != len(rank_shards)
                 ):
                     raise ValueError(
                         f"invalid rank shard inventory at {rank_inventory_path}"
                     )
+                selected_shards = rank_shards
             paths = tuple(root / name for name in selected_shards)
             missing = [str(path) for path in paths if not path.is_file()]
             if missing:
@@ -1340,12 +1342,10 @@ def _decode_image(data) -> torch.Tensor:
 
 
 class _PoolAccessor:
-    """Path-based frame-pool reader (#121 §3.4d): ``frame_id -> jpeg bytes``.
+    """Path-based frame-pool reader: ``frame_id -> jpeg bytes``.
 
-    Reads ``<pool_dir>/<frame_id>.jpg`` on demand. Path-based (not an open handle)
-    so it pickles cleanly to spawn DataLoader workers; the OS page cache shares the
-    bytes across workers/epochs. Returns None if the pool dir is absent (a shard
-    with no deduped windows), so the loader falls back to the legacy layout.
+    Reads ``<pool_dir>/<frame_id>.jpg`` on demand. Holding a path rather than an
+    open handle lets it pickle cleanly to spawn DataLoader workers.
     """
 
     def __init__(self, pool_dir: str):
@@ -1461,13 +1461,12 @@ def _decode_sample(
     datasets instead expose one loader-level ``.projection`` /
     ``.geometry_type`` fallback from their manifest.
 
-    ``pool`` is a frame-pool accessor (``frame_id -> jpeg bytes``) for shards packed
-    with the deduped WM window (#121 §3.4d): the sample carries a
-    ``window_index.json`` mapping (step,view)→frame_id and the pixels live in a
-    sibling ``pool/`` dir. None on shards without a pool (imitation-only / legacy).
+    ``pool`` is a frame-pool accessor (``frame_id -> jpeg bytes``) for shards
+    whose World-Model windows reference frames by id through
+    ``window_index.json``; None on shards without a pool.
     """
-    # Keys: "cam_0.jpg" ... "cam_{V-1}.jpg", schema-v8 navigation
-    # members or a legacy optional "map.jpg", plus numeric/metadata members.
+    # Keys: "cam_0.jpg" ... "cam_{V-1}.jpg", navigation members or an optional
+    # "map.jpg", plus numeric/metadata members.
     cam_keys = sorted(
         (k for k in sample if _CAM_KEY_RE.match(k)),
         key=lambda k: int(k[len("cam_"):-len(".jpg")]),
@@ -1829,8 +1828,8 @@ def _decode_sample(
                 "drivable_available": torch.tensor(False),
             }
     else:
-        # L2D keeps its existing RGB map contract during this KITScenes
-        # milestone. NVIDIA and map-less shards receive explicit invalid inputs.
+        # L2D keeps its RGB map tile. NVIDIA and map-less shards receive
+        # explicit invalid inputs.
         if "map.jpg" in sample:
             map_context = _decode_image(sample["map.jpg"])
             map_valid = torch.tensor(True, dtype=torch.bool)
@@ -1904,7 +1903,6 @@ def _decode_sample(
             ),
         }
 
-    # Ego: raw bytes → numpy → split into history and future
     ego_bytes = sample.get("ego.npy", b"")
     if isinstance(ego_bytes, bytes) and len(ego_bytes) > 0:
         ego = np.frombuffer(ego_bytes, dtype=np.float32).copy()
@@ -2222,12 +2220,9 @@ def _decode_sample(
             decode_gps_future(gps_data)
         )
 
-    # Optional World-Model windows (#13/#3.4d): the sample carries window_index.json
-    # (a (step,view)→frame_id map); the frames themselves are in the sibling pool/.
-    # Rebuild history_frames [T, V, 3, H, W] and future_frames [F, V, 3, H, W]
-    # (oldest→newest) — IDENTICAL tensors to the old per-sample hist_/fut_ layout,
-    # just deduped in storage. Present only on WM shards; absent → no JEPA loss.
-    # (Legacy hist_/fut_ shards still decode via _decode_window_legacy for back-compat.)
+    # Optional World-Model windows: window_index.json maps (step, view) to a
+    # frame_id in the sibling pool/. Rebuild history_frames [T, V, 3, H, W] and
+    # future_frames [F, V, 3, H, W], oldest to newest. Absent means no JEPA loss.
     windows = _decode_windows_from_pool(
         sample,
         pool,
@@ -2241,19 +2236,11 @@ def _decode_sample(
         if future_frames is not None:
             out["future_frames"] = future_frames
 
-    # Optional reasoning labels (#98): a per-sample "reasoning.json" member holds
-    # a serialized ReasoningLabelRecord (same shard key → auto-aligned with this
-    # sample's frames, no sample_id join). Decode it to per-sample target tensors
-    # for HorizonReasoningLoss, flattened to top-level "reasoning__*" keys so
-    # WebDataset's per-key default collation stacks them into [B, ...] batches.
-    # Absent on shards packed without a teacher — the loader stays
-    # reasoning-agnostic and training skips the reasoning loss.
-    # ALWAYS emit reasoning__* keys so a batch that mixes labeled + unlabeled
-    # samples collates (default_collate needs identical keys across a batch). An
-    # unlabeled sample gets a fully-MASKED target (abstained record → IGNORE_INDEX
-    # / zero source_weight), so it contributes nothing to the reasoning loss —
-    # never a false-negative all-zero row. Shards packed with a teacher carry
-    # reasoning.json; imitation-only samples don't, and both must batch together.
+    # Optional reasoning labels: "reasoning.json" holds a serialized
+    # ReasoningLabelRecord, flattened to top-level "reasoning__*" keys so the
+    # default collation stacks them into [B, ...]. The keys are always emitted
+    # so labeled and unlabeled samples collate together; an unlabeled sample
+    # gets a fully masked target and contributes nothing to the loss.
     reasoning_data = sample.get("reasoning.json")
     for key, tensor in _decode_reasoning_targets(reasoning_data).items():
         out[f"reasoning__{key}"] = tensor
@@ -2262,13 +2249,10 @@ def _decode_sample(
 
 
 def _decode_reasoning_targets(data) -> dict:
-    """Decode the reasoning.json member into per-sample target tensors (#98).
+    """Decode the reasoning.json member into per-sample target tensors.
 
-    Lazy imports the data_processing tensorizer so importing this loader never
-    pulls the label package unless training touches reasoning. When ``data`` is
-    None (sample has no reasoning.json), return the tensors of an ABSTAINED
-    record — all IGNORE_INDEX / zero source_weight — so the sample batches with
-    labeled ones and is fully masked out of the reasoning loss (R9).
+    When ``data`` is None, return the tensors of an abstained record (all
+    IGNORE_INDEX, zero source_weight) so the sample is masked out of the loss.
     """
     from data_processing.reasoning_label_generation.schema import ReasoningLabelRecord
     from data_processing.reasoning_label_generation.targets import (
@@ -2288,15 +2272,12 @@ def _decode_reasoning_targets(data) -> dict:
 
 
 def _decode_window_from_index(index_steps, pool) -> torch.Tensor:
-    """Decode one window (history or future) from a ``[[frame_id/view] /step]`` index.
+    """Decode one window from a per-step list of per-view frame_ids.
 
-    Looks each frame_id up in the pool accessor, decodes, and stacks into
-    ``[steps, V, 3, H, W]`` (oldest→newest) — the exact shape/order the model
-    consumes. Byte-identical to the old per-sample layout because the pool holds the
-    same JPEG bytes the packer produced.
+    Returns ``[steps, V, 3, H, W]``, oldest to newest.
     """
     frame_steps = []
-    for view_ids in index_steps:                       # one list of frame_ids per step
+    for view_ids in index_steps:
         view_frames = [_decode_image(pool(fid)) for fid in view_ids]
         frame_steps.append(torch.stack(view_frames))   # [V, 3, H, W]
     return torch.stack(frame_steps)                     # [steps, V, 3, H, W]
@@ -2311,9 +2292,8 @@ def _decode_windows_from_pool(
 ):
     """Rebuild (history_frames, future_frames) from window_index.json + the pool.
 
-    Returns None when the sample has no window_index.json (imitation-only). Falls
-    back to the LEGACY per-sample hist_/fut_ member layout when a shard predates the
-    frame pool (so old shards still train). Requires a pool accessor when a
+    Without window_index.json, falls back to per-sample hist_/fut_ members and
+    returns None when those are absent too. Requires a pool accessor when
     window_index.json is present.
     """
     if not decode_history_frames and not decode_future_frames:
@@ -2349,8 +2329,9 @@ def _decode_windows_legacy(
     decode_history_frames: bool = True,
     decode_future_frames: bool = True,
 ):
-    """Legacy path: decode hist_<t>_cam_<v>.jpg / fut_<f>_cam_<v>.jpg members
-    (pre-#3.4d shards). Returns (history, future) or None if absent."""
+    """Decode per-sample hist_<t>_cam_<v>.jpg / fut_<f>_cam_<v>.jpg members.
+
+    Returns (history, future) or None if absent."""
     def _one(key_re):
         matches = [(m, k) for k in sample if (m := key_re.match(k))]
         if not matches:
@@ -2390,16 +2371,12 @@ def load_projection_from_manifest(shard_dir: str):
                         "fw_poly": [...], "cx": [...], "cy": [...],
                         "image_wh": [...], "max_theta": ...}}  # native (W,H), FOV
 
-    A legacy dataset without calibration returns ``(None, "pseudo")`` and the
-    caller runs the explicit pseudo path. This is
-    the single geometry-reconstruction point, keeping the pinhole/f-theta split
-    out of the training loop.
+    A dataset without calibration returns ``(None, "pseudo")`` and the caller
+    runs the explicit pseudo path.
     """
     mpath = Path(shard_dir) / "manifest.json"
-    # Missing manifest -> pseudo (a legacy shard has no geometry). But a manifest
-    # that EXISTS and cannot be read must RAISE: silently degrading a calibrated
-    # run to pseudo geometry would corrupt experiments. Corrupt/unreadable is a
-    # hard error, not a fallback.
+    # A missing manifest means pseudo geometry, but an unreadable one raises:
+    # silently degrading a calibrated run to pseudo geometry would corrupt it.
     if not mpath.exists():
         return None, "pseudo"
     try:
@@ -2437,10 +2414,8 @@ def projection_from_spec(spec):
     if kind == "ftheta":
         def _t(key):
             return torch.tensor(spec[key], dtype=torch.float32).unsqueeze(0)
-        # fw_poly may be serialized as a shared [K] (flat list) or per-view [V,K]
-        # (nested list) — to_spec keeps a shared vector whole. Reconstruct the
-        # matching shape so to_spec/load round-trip is exact: shared -> [K],
-        # per-view -> [1,V,K].
+        # fw_poly is serialized as a shared [K] or per-view [V,K]; restore the
+        # matching shape ([K] or [1,V,K]) so the to_spec round-trip is exact.
         fw = spec["fw_poly"]
         if fw and isinstance(fw[0], (list, tuple)):
             fw_poly = torch.tensor(fw, dtype=torch.float32).unsqueeze(0)  # [1,V,K]
@@ -2465,22 +2440,19 @@ def projection_from_spec(spec):
 def _split_bucket(key: str, buckets: int = 10) -> int:
     """Deterministic bucket in [0, buckets) from a stable string.
 
-    Uses a fixed hash (blake2b) — NOT Python's ``hash()``, which is salted per
-    process, so train and eval workers (and reruns) would disagree on the split.
-    Reproducible across the train task and the (separate) eval task.
+    Uses a fixed hash rather than Python's per-process salted ``hash()`` so
+    train and eval processes agree on the split.
     """
     from data_processing.dataset_snapshot import split_bucket
     return split_bucket(key, buckets)
 
 
 def _split_group_of(sample, *, required: bool = False) -> str:
-    """The train/val SPLIT key for a raw shard sample (#121 §3.1).
+    """The train/val split key for a raw shard sample.
 
-    Hash the ``split_group_uid`` from the sample's ``meta.json`` (episode/clip
-    granularity) — NOT the per-frame ``__key__`` — so all frames of one episode
-    fall in the SAME bucket and never straddle train/val (adjacent frames are
-    strongly correlated → a per-frame split leaks). Falls back to ``__key__`` for
-    legacy shards whose meta.json predates split_group_uid.
+    Uses the episode/clip ``split_group_uid`` from ``meta.json`` so correlated
+    frames of one episode never straddle train/val. Falls back to ``__key__``
+    when the group is missing, unless ``required`` is set.
     """
     import json
     meta = sample.get("meta.json")
@@ -2550,14 +2522,11 @@ def _split_keep(
 ):
     """Return a predicate ``sample -> bool`` selecting the requested split.
 
-    ``split="all"`` (default) keeps everything (backward-compatible, single-set
-    behaviour). ``"train"`` / ``"val"`` partition by a stable hash of the sample's
-    ``split_group_uid`` (episode/clip) into disjoint sets: ``val`` is the first
-    ``round(val_fraction*10)`` of 10 buckets, ``train`` is the rest. Splitting by
-    GROUP (not per-frame) keeps a whole episode/clip on one side, so eval-on-``val``
-    measures generalization to UNSEEN episodes, not memorization of neighbours.
-    A supplied ``validation_group_uids`` manifest replaces hash bucketing with
-    exact membership and requires every sample to carry an explicit group UID.
+    ``split="all"`` keeps everything. ``"train"`` / ``"val"`` partition by a
+    stable hash of ``split_group_uid``: ``val`` is the first
+    ``round(val_fraction*10)`` of 10 buckets, ``train`` is the rest. A supplied
+    ``validation_group_uids`` manifest replaces hash bucketing with exact
+    membership and requires every sample to carry an explicit group UID.
     """
     if split not in {"all", "train", "val"}:
         raise ValueError(f"unsupported split {split!r}")
@@ -2741,6 +2710,31 @@ class _SampleUidFilter:
         return str(sample.get("__key__", "")) in self.allowed
 
 
+def _detach_resource_tracker_pipe_from_exec(worker_id: int) -> None:
+    """DataLoader ``worker_init_fn``: keep the tracker pipe out of exec'd helpers.
+
+    A spawned worker inherits the parent's multiprocessing resource-tracker
+    pipe as an inheritable fd. On macOS torch shares worker tensors through the
+    ``file_system`` strategy, so the worker execs a ``torch_shm_manager`` daemon
+    that would inherit that pipe too. The daemon lives until the parent process
+    exits, while the parent's interpreter shutdown (Python 3.12
+    ``ResourceTracker.__del__``) waits for the tracker, which only exits once
+    every copy of the pipe is closed. That cycle hangs the parent forever at
+    exit. Marking the fd non-inheritable in the worker breaks it; the worker
+    itself keeps using the pipe.
+    """
+    del worker_id
+    from multiprocessing import resource_tracker
+
+    tracker_fd = getattr(resource_tracker._resource_tracker, "_fd", None)
+    if tracker_fd is None:
+        return
+    try:
+        os.set_inheritable(tracker_fd, False)
+    except OSError:
+        pass
+
+
 def make_pre_extracted_loader(
     shard_dir: str,
     batch_size: int = 8,
@@ -2767,12 +2761,8 @@ def make_pre_extracted_loader(
     Args:
         shard_dir: Path to directory containing .tar shard files.
         batch_size: Batch size.
-        num_workers: DataLoader workers. >0 decodes JPEGs in parallel worker
-            processes (the per-sample WM window is ~55 decodes; at num_workers=0
-            this is fully serial and the GPU stalls — #121 P0). Workers are
-            sharded over the .tar files via ``split_by_worker``, so effective
-            parallelism is capped by shard count — pack more, smaller shards to use
-            more workers.
+        num_workers: DataLoader workers. Workers are sharded over the .tar
+            files, so effective parallelism is capped by shard count.
         split: ``"all"`` (default, every sample), ``"train"``, or ``"val"``. With
             ``val_fraction`` > 0, ``train``/``val`` are disjoint at
             ``split_group_uid`` granularity (see ``_split_keep``).
@@ -2849,14 +2839,9 @@ def make_pre_extracted_loader(
 
     urls = [str(p) for p in tarfiles]
 
-    # CRITICAL (webdataset 1.0.2): WebDataset has BOTH `nodesplitter` and
-    # `workersplitter`, and `workersplitter` DEFAULTS to split_by_worker. Passing
-    # nodesplitter=split_by_worker applies the worker split TWICE, so with
-    # num_workers=N each worker sees only 1/N of the shards → the loader silently
-    # drops (N-1)/N of the data (verified: 48 samples → 24 at nw=2, 12 at nw=4).
-    # Use single_node_only for the NODE slot (correct until multi-node DDP, which
-    # would set split_by_node here) and let the default workersplitter do the
-    # per-worker shard split exactly once.
+    # webdataset's `workersplitter` already defaults to split_by_worker. Passing
+    # split_by_worker as `nodesplitter` too would split twice and silently drop
+    # (N-1)/N of the data, so the node slot uses single_node_only.
     dataset = wds.WebDataset(
         urls,
         shardshuffle=False,
@@ -2899,12 +2884,10 @@ def make_pre_extracted_loader(
         dataset = dataset.compose(bev_repeat_policy)
     if shuffle > 0:
         dataset = dataset.shuffle(shuffle, seed=shuffle_seed)
-    # Frame-pool accessor for deduped WM windows (#121 §3.4d): a sibling pool/ dir
-    # next to the .tar shards, NOT part of `urls`, so split_by_worker never shards
-    # it away — every worker reaches any frame_id by path. Path-based + lazily read,
-    # so it pickles cleanly to spawn workers (no open handle crosses the boundary).
+    # The frame pool is a sibling pool/ dir outside `urls`, so worker sharding
+    # never hides frames from a worker.
     pool = _make_pool_accessor(shard_dir)
-    # functools.partial (NOT a lambda) so the map fn pickles to spawn workers.
+    # functools.partial rather than a lambda so the map fn pickles to workers.
     dataset = dataset.map(functools.partial(
         _decode_sample,
         pool=pool,
@@ -2913,10 +2896,8 @@ def make_pre_extracted_loader(
         decode_front_camera_fpn=decode_front_camera_fpn,
     ))
 
-    # split_by_worker shards the .tar list across workers, so more workers than
-    # shards is wasted; cap accordingly. Partition-scoped loaders are retired as
-    # soon as that partition is exhausted, so workers MUST NOT persist beyond the
-    # iterator lifetime. prefetch_factor overlaps decode with the GPU step.
+    # More workers than shards is wasted. Partition-scoped loaders are retired
+    # once exhausted, so workers must not persist beyond the iterator lifetime.
     eff_workers = min(num_workers, len(tarfiles)) if num_workers > 0 else 0
     loader_kwargs: dict = {
         "batch_size": batch_size,
@@ -2928,6 +2909,7 @@ def make_pre_extracted_loader(
             persistent_workers=False,
             prefetch_factor=prefetch_factor,
             pin_memory=pin_memory,
+            worker_init_fn=_detach_resource_tracker_pipe_from_exec,
         )
     loader = wds.WebLoader(dataset, **loader_kwargs)
 
@@ -2964,19 +2946,13 @@ class _ActiveLoader:
 class MergedDatasetLoader:
     """Bounded round-robin over multiple single-dataset loaders.
 
-    Different datasets have different camera counts (L2D 6, NVIDIA 7) and
-    geometries (pseudo vs f-theta), which cannot be stacked into one batch. So
-    every batch remains same-dataset (uniform num_views/geometry) and carries that
-    dataset's projection.
+    Datasets differ in camera count and geometry, so every batch stays
+    same-dataset. Each yielded item is ``(batch, projection, geometry_type)``.
 
-    Only ``max_active_loaders`` child iterators exist at once. Within that window
-    batches retain the original round-robin ordering; when a child is exhausted
-    it is closed before the next pending child is opened. Loader factories are
-    invoked lazily and recreated per epoch, which bounds worker, prefetch, shuffle,
-    and pin-memory state even when the input contains hundreds of partitions.
-
-    Each yielded item is ``(batch, projection, geometry_type)`` so the training
-    loop applies the right geometry to each (same-dataset) batch.
+    Only ``max_active_loaders`` child iterators exist at once; an exhausted
+    child is closed before the next pending one opens. Loader factories are
+    invoked lazily per epoch, which bounds worker and prefetch state even with
+    hundreds of partitions.
     """
 
     def __init__(
@@ -3095,20 +3071,10 @@ def make_multi_dataset_loader(
 ) -> MergedDatasetLoader:
     """Build a :class:`MergedDatasetLoader` over several shard directories.
 
-    Each directory is one dataset (its own manifest + geometry). Datasets are
-    merged through a bounded active window (see MergedDatasetLoader). A single
-    directory degrades to a one-loader merge (identical to the single dataset
-    path, but yielding the ``(batch, projection, geometry_type)`` tuple).
-
-    ``split`` / ``val_fraction`` select a disjoint group-level train/val split
-    applied per dataset (see make_pre_extracted_loader). ``num_workers`` is a
-    GLOBAL worker budget: each active partition gets one worker, and no more than
-    four partition loaders are active. Evaluation can use
-    ``max_active_loaders=1`` together with a small
-    ``prefetch_factor`` to bound its larger batches.
-
-    ``decode_front_camera_fpn`` forwards the exact base-resolution Front
-    companion request to every child loader.
+    Each directory is one dataset with its own manifest and geometry. Split
+    and decode options are forwarded to every child (see
+    make_pre_extracted_loader). ``num_workers`` is a global budget: each active
+    partition gets one worker, and at most four partition loaders are active.
     """
     if num_workers < 0:
         raise ValueError("num_workers must be non-negative")

@@ -112,8 +112,7 @@ func (h *MLflowHandler) Run(w http.ResponseWriter, r *http.Request) {
 }
 
 // safeUpstreamID rejects ids that could act as path components upstream
-// (defense in depth: MLflow ids currently travel as query/body values, but
-// keep them from ever traversing a URL path).
+// (defense in depth: MLflow ids travel as query/body values).
 func safeUpstreamID(s string) bool {
 	return s != "" && !strings.ContainsAny(s, "/\\") && !strings.Contains(s, "..")
 }

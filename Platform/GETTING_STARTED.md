@@ -66,13 +66,13 @@ aws codebuild start-build --project-name auto-e2e-platform-flyte-register \
 
 - Open [MLflow UI](https://d33520viyb0smg.cloudfront.net/)
 - Experiments:
-  - `auto-e2e/il-training` — training loss, hyperparams
-  - `auto-e2e/evaluation` — ADE, FDE, gate pass/fail
-  - `auto-e2e/offline-rl` — IQL losses
+  - `imitation-learning` — IL training loss, hyperparams, ADE, FDE, gate pass/fail
+  - `offline-rl` — IQL-refined policy evaluation
   - `reactive-training` — Ray training losses, validation metrics,
     checkpoint lineage, and failure recovery
   - `reactive-bev-evaluation` — standalone nuPlan or KITScenes BEV
     validation reports for immutable Reactive checkpoints
+  - `reactive-policy-evaluation` — Reactive policy evaluation reports
 - Compare runs: select multiple runs → **Compare** button
 - Filter by `model/backbone`, `model/fusion_mode`, or `git_commit`
 
@@ -84,7 +84,7 @@ aws codebuild start-build --project-name auto-e2e-platform-flyte-register \
 |----------|---------|-------------|
 | `wf_data_ingest` | Download & preprocess dataset | Once per dataset version, or when preprocessing changes |
 | `wf_train_il` | Imitation Learning training | Every training experiment |
-| `wf_evaluate` | Open-loop eval (ADE/FDE) | After each training to check quality |
+| `wf_ingest_train_eval` | Ingest, IL training, and open-loop eval (ADE/FDE) | Training plus a quality check in one run |
 | `wf_train_offline_rl` | Offline RL refinement | To improve IL checkpoint without simulator |
 | `wf_full_pipeline` | All stages end-to-end | Quick full run with one click |
 
@@ -93,8 +93,8 @@ aws codebuild start-build --project-name auto-e2e-platform-flyte-register \
 ## Data Flow Between Tasks
 
 ```
-wf_data_ingest          wf_train_il           wf_evaluate
-─────────────           ───────────           ───────────
+wf_data_ingest          wf_train_il           evaluate_il_policy
+─────────────           ───────────           ──────────────────
     │                       │                     │
     ▼                       ▼                     ▼
 FlyteDirectory ──S3──▶ shards input       checkpoint + shards
@@ -131,7 +131,7 @@ training run without changing the source run's status.
 
 ### Comparing Experiments
 
-1. Go to MLflow → Experiment `auto-e2e/il-training`
+1. Go to MLflow → Experiment `imitation-learning`
 2. Select 2+ runs with checkboxes
 3. Click **Compare**
 4. See side-by-side params, metric charts, and artifacts
@@ -164,7 +164,8 @@ training run without changing the source run's status.
    ```python
    class Dataset(enum.Enum):
        L2D = "yaak-ai/L2D"
-       NVIDIA_PHYSICAL_AI = "nvidia/PhysicalAI"
+       KITSCENES = "KIT-MRT/KITScenes-Multimodal"
+       NVIDIA_PHYSICAL_AI = "nvidia/PhysicalAI-Autonomous-Vehicles"
        YOUR_DATASET = "org/your-dataset"  # add here
    ```
 
@@ -185,6 +186,8 @@ training run without changing the source run's status.
    ```python
    class Backbone(enum.Enum):
        SWIN_V2_TINY = "swin_v2_tiny"
+       CONVNEXT_V2_TINY = "conv_next_v2_tiny"
+       RESNET_50 = "res_net_50"
        YOUR_MODEL = "your_model_name"  # add here
    ```
 

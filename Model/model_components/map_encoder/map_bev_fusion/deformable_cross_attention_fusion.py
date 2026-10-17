@@ -34,6 +34,7 @@ class MapDeformableCrossAttentionFusion(nn.Module):
         num_heads: Number of attention heads. Heads share the K sampling
             locations but learn independent attention weights.
         dropout: Dropout applied inside the FFN.
+        query_chunk_size: Queries processed per chunk to bound peak memory.
     """
 
     def __init__(
@@ -127,7 +128,6 @@ class MapDeformableCrossAttentionFusion(nn.Module):
         ref_grid = torch.stack([grid_x, grid_y], dim=-1)  # (H, W, 2)
         ref_grid = ref_grid.reshape(1, N, 1, 2)  # (1, N, 1, 2)
 
-        # Flatten spatial dims: (B, N, C)
         q = image_bev.permute(0, 2, 3, 1).reshape(B, N, C)
         q_norm = self.norm_query(q)
 
@@ -185,5 +185,4 @@ class MapDeformableCrossAttentionFusion(nn.Module):
         q = q + self.out_proj(attn_out)
         q = q + self.ffn(self.norm_ffn(q))
 
-        # Reshape back to spatial: (B, C, H, W)
         return q.reshape(B, H, W, C).permute(0, 3, 1, 2).contiguous()

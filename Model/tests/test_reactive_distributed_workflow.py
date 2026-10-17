@@ -14,7 +14,6 @@ import subprocess
 import sys
 import types
 import zipfile
-from datetime import timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -87,14 +86,11 @@ def test_l2d_workflow_defaults_use_reactive_camera_contract():
         source.count(
             "image_size: int = REACTIVE_CAMERA_IMAGE_SIZE"
         )
-        == 12
+        == 8
     )
     for name, dataset_version in (
-        ("buildspec-launch-sharded.yml", "v3.5"),
         ("buildspec-launch-fullrun.yml", "v3.5"),
-        ("buildspec-launch-recovery.yml", "v3.5"),
         ("buildspec-launch-overlay.yml", "v2.4"),
-        ("buildspec-launch-reconstruction-audit.yml", "v3.5"),
     ):
         buildspec = (
             Path(workflows.__file__).parents[1] / name
@@ -224,17 +220,13 @@ def test_l2d_sharded_workflow_binds_total_sample_limit():
         == "total_sample_limit"
     )
 
-    for filename in (
-        "buildspec-launch-sharded.yml",
-        "buildspec-launch-fullrun.yml",
-    ):
-        buildspec = (
-            Path(workflows.__file__).parents[1] / filename
-        ).read_text(encoding="utf-8")
-        assert "DATASET: KIT-MRT/KITScenes-Multimodal" in buildspec
-        assert 'TOTAL_SAMPLE_LIMIT: "0"' in buildspec
-        assert '--dataset "$DATASET"' in buildspec
-        assert "--total_sample_limit $TOTAL_SAMPLE_LIMIT" in buildspec
+    buildspec = (
+        Path(workflows.__file__).parents[1] / "buildspec-launch-fullrun.yml"
+    ).read_text(encoding="utf-8")
+    assert "DATASET: KIT-MRT/KITScenes-Multimodal" in buildspec
+    assert 'TOTAL_SAMPLE_LIMIT: "0"' in buildspec
+    assert '--dataset "$DATASET"' in buildspec
+    assert "--total_sample_limit $TOTAL_SAMPLE_LIMIT" in buildspec
 
 
 def test_l2d_bounded_sampling_rejects_reasoning_labels():
@@ -1174,7 +1166,6 @@ def test_reviewed_ray_topologies_have_fixed_worker_groups():
     for config in (
         distributed_training.RAY_1,
         distributed_training.RAY_2,
-        distributed_training.RAY_4,
         distributed_training.RAY_REACTIVE_4,
         distributed_training.RAY_8,
     ):
@@ -1626,9 +1617,6 @@ def test_ray_tasks_serialize_the_resolved_storage_path():
         "RAY_TRAIN_V2_ENABLED": "1",
     }
 
-    assert distributed_training.ray_ddp_smoke_4.environment == (
-        expected_environment
-    )
     assert distributed_training.train_reactive_stage_ray_2.environment == (
         expected_environment
     )
@@ -2177,9 +2165,9 @@ def test_reactive_mlflow_run_is_reused_for_flyte_retry(
         "validation_sample_limit": 1024,
         "weight_decay": 1e-2,
     }
-    created_runs = []
-    logged_params = {}
-    tags = {}
+    created_runs: list[SimpleNamespace] = []
+    logged_params: dict[str, object] = {}
+    tags: dict[str, object] = {}
 
     class Client:
         def search_runs(self, **kwargs):
@@ -2205,17 +2193,21 @@ def test_reactive_mlflow_run_is_reused_for_flyte_retry(
             tags[name] = value
 
     client = Client()
+    # ModuleType does not declare these attributes, so attach the fakes
+    # through setattr rather than attribute assignment.
     mlflow_module = types.ModuleType("mlflow")
-    mlflow_module.set_tracking_uri = lambda uri: tags.setdefault(
-        "tracking_uri",
-        uri,
+    setattr(
+        mlflow_module,
+        "set_tracking_uri",
+        lambda uri: tags.setdefault("tracking_uri", uri),
     )
-    mlflow_module.set_experiment = lambda name: SimpleNamespace(
-        experiment_id="11",
-        name=name,
+    setattr(
+        mlflow_module,
+        "set_experiment",
+        lambda name: SimpleNamespace(experiment_id="11", name=name),
     )
     tracking_module = types.ModuleType("mlflow.tracking")
-    tracking_module.MlflowClient = lambda: client
+    setattr(tracking_module, "MlflowClient", lambda: client)
     monkeypatch.setitem(sys.modules, "mlflow", mlflow_module)
     monkeypatch.setitem(
         sys.modules,
@@ -2437,17 +2429,6 @@ def test_four_rank_workflow_runs_one_frozen_multitask_stage():
             "kueue.x-k8s.io/queue-name": "p5en-capacity-block",
             "kueue.x-k8s.io/priority-class": "production-high",
         }
-    assert distributed_training.ray_ddp_smoke_4.metadata.labels == {
-        "kueue.x-k8s.io/queue-name": "p5en-capacity-block",
-        "kueue.x-k8s.io/priority-class": "research-low",
-    }
-    assert (
-        distributed_training.ray_ddp_smoke_4.metadata.timeout
-        == timedelta(minutes=30)
-    )
-    assert "capacity_block_end_utc" in (
-        distributed_training.ray_ddp_smoke_4.python_interface.inputs
-    )
 
 
 def test_eight_rank_workflow_runs_one_frozen_trajectory_route_stage():
@@ -2710,7 +2691,6 @@ def test_gpu_tasks_use_separate_training_and_validation_capacity():
 
     for task in (
         workflows.evaluate_il_policy,
-        workflows.evaluate_navigation_records,
         workflows.evaluate_rl_policy,
         workflows.evaluate_kitscenes_benchmark_checkpoint,
     ):

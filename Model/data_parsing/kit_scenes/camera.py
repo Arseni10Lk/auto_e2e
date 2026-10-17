@@ -3,11 +3,11 @@
 KIT Scenes stores per-frame JPEGs on disk (not videos), already at the 10 Hz
 reference timeline, so a single ``frame_idx`` indexes every camera and the ego
 poses alike. The ``kitscenes`` SDK's ``SensorDataLoader`` decodes a frame to an
-RGB ``np.ndarray``; this module resizes/normalises it for the AutoE2E backbone
-and stacks the 6 camera views into the tensor the model expects.
+RGB ``np.ndarray``; this module resizes it (or applies an optional transform)
+and stacks the 6 camera views.
 
 Camera projection matrices are computed from KITScenes calibration files, with
-intrinsics scaled to match the backbone's actual resize/crop transform.
+intrinsics scaled to match the applied resize.
 """
 
 from __future__ import annotations
@@ -21,7 +21,6 @@ from PIL import Image
 from scipy.spatial.transform import Rotation
 from torchvision.transforms import Compose
 
-# Shared, dataset-agnostic intrinsic scaling (re-exported for backward compat).
 from ..calibration import scale_intrinsic
 from ..camera_slots import CANONICAL_SIX_CAMERA_SLOTS
 
@@ -40,7 +39,6 @@ CAMERA_NAMES: list[str] = [
     "camera_ring_rear_right",
 ]
 
-# Total views fed to the model = 6 cameras.
 NUM_VIEWS = len(CAMERA_NAMES)
 CAMERA_SLOTS = CANONICAL_SIX_CAMERA_SLOTS
 CAMERA_SLOT_BY_NAME = dict(zip(CAMERA_NAMES, CAMERA_SLOTS))

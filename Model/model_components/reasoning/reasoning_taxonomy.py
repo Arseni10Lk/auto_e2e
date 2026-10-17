@@ -1,32 +1,25 @@
-"""Compositional, action-relevant reasoning taxonomy (issue #98, v2).
+"""Compositional, action-relevant reasoning taxonomy.
 
 Single source of truth for the reasoning label space, shared by the runtime
 student head (``model_components``) and the offline label-generation pipeline
 (``data_processing``). It carries no teacher dependency, so importing it never
 pulls in a VLM client.
 
-Design (per the Horizon-Aware Action-Relevant Reasoning Head proposal in #98):
-
-* The label space is NOT a flat scene-fact enum. It is a set of independent
+* The label space is not a flat scene-fact enum. It is a set of independent
   axes ("groups"), each answering a distinct question — what relates to ego,
   what the hazard is, why (cause), and how ego should respond
   (longitudinal / lateral / tactical / rule).
-* Each group is either MULTI-label (several labels can be active — hazard,
-  cause, scene context) or SINGLE-label (mutually exclusive — relation, the
+* Each group is either multi-label (several labels can be active — hazard,
+  cause, scene context) or single-label (mutually exclusive — relation, the
   four response axes). The mode is part of the loss contract: multi-label
   groups train with BCE/ASL, single-label with cross-entropy.
-* Label ORDER within a group is part of the loss contract: index ``i`` is a
+* Label order within a group is part of the loss contract: index ``i`` is a
   fixed class. Append only; never insert or reorder. This lets the taxonomy
-  grow (new datasets, v2 optional axes) without invalidating trained weights
+  grow without invalidating trained weights
   or stored label artifacts.
-* Every group carries an ``unknown_*`` label so a teacher can abstain WITHIN a
-  group without emitting an all-zero (falsely-negative) row.
-
-This supersedes the v1 three-axis taxonomy (``maneuver`` / ``edge_case`` /
-``weather_env``): ``maneuver`` is the "action" label the WG flagged as least
-additive (the trajectory already encodes it), and ``weather_env`` is not
-action-relevant (what matters is ``low_friction_risk`` as a hazard, not "it is
-raining"). Research phase — the old taxonomy is removed, not wrapped.
+* Every group carries an abstain label (``unknown_*``, ``no_*`` or ``none``) so a
+  teacher can abstain within a group without emitting an all-zero
+  (falsely-negative) row.
 """
 
 from __future__ import annotations
@@ -75,8 +68,6 @@ class TaxonomyGroup:
             raise ValueError(
                 f"TaxonomyGroup '{self.name}' contains duplicate labels: {self.labels}"
             )
-        # An abstain label is required so a teacher can decline within a group
-        # rather than forcing an all-zero (falsely-negative) row.
         if not any(
             lbl.startswith("unknown") or lbl.startswith("no_") or lbl == "none"
             for lbl in self.labels
@@ -91,9 +82,9 @@ class TaxonomyGroup:
 
     @property
     def abstain_label(self) -> str:
-        """The group's abstain label (unknown_*/no_*/none) — always exists per
-        the __post_init__ invariant. Used to backfill an empty MULTI-label group
-        with an explicit 'nothing here' instead of a false-negative all-zero row.
+        """The group's abstain label, guaranteed by ``__post_init__``.
+
+        Used to backfill an empty multi-label group instead of an all-zero row.
         """
         for lbl in self.labels:
             if lbl.startswith("unknown") or lbl.startswith("no_") or lbl == "none":
@@ -112,11 +103,8 @@ class TaxonomyGroup:
             )
 
 
-# ---------------------------------------------------------------------------
-# Minimum v1 label groups — the action-relevant core (do NOT reorder entries;
-# index is part of the loss contract). Optional v2 context/timing axes append
-# via register_group without touching these indices.
-# ---------------------------------------------------------------------------
+# Canonical label groups. Do not reorder entries: index is part of the loss
+# contract. Additional axes append via register_group without touching these.
 
 # How the salient object relates to the ego path (single-label).
 _RELATION_TO_EGO: tuple[str, ...] = (
@@ -257,7 +245,7 @@ _RULE_RESPONSE: tuple[str, ...] = (
 )
 
 
-# The canonical v1 groups in a fixed order. Each entry is (name, labels, mode).
+# (name, labels, mode) in fixed order.
 _V1_GROUPS: tuple[tuple[str, tuple[str, ...], LabelMode], ...] = (
     ("relation_to_ego", _RELATION_TO_EGO, LabelMode.SINGLE),
     ("hazard_event", _HAZARD_EVENT, LabelMode.MULTI),
@@ -273,7 +261,7 @@ class ReasoningTaxonomy:
     """Registry of reasoning label groups (the compositional label space).
 
     The seven canonical action-relevant groups are registered at construction.
-    Optional v2 context/timing axes append via :meth:`register_group` or
+    Additional axes append via :meth:`register_group` or
     :meth:`extend` without breaking any existing index.
 
     Example::
@@ -289,10 +277,6 @@ class ReasoningTaxonomy:
         self._groups: Dict[str, TaxonomyGroup] = {}
         for name, labels, mode in _V1_GROUPS:
             self.register_group(name, labels, mode)
-
-    # ------------------------------------------------------------------
-    # Extension API (append-only)
-    # ------------------------------------------------------------------
 
     def register_group(
         self, name: str, labels: Sequence[str], mode: LabelMode = LabelMode.MULTI
@@ -325,10 +309,6 @@ class ReasoningTaxonomy:
         )
         self._groups[name] = updated
         return updated
-
-    # ------------------------------------------------------------------
-    # Read API
-    # ------------------------------------------------------------------
 
     def __getitem__(self, name: str) -> TaxonomyGroup:
         try:
@@ -373,11 +353,9 @@ class ReasoningTaxonomy:
     def validate_exact_match(self, other: "ReasoningTaxonomy") -> None:
         """Assert *other* is label-for-label identical to this taxonomy.
 
-        Required before fusing multiple teachers (issue #98 R10): group-name
-        equality is not enough — agreement is computed index-by-index, so every
-        taxonomy must share the SAME groups with the SAME labels in the SAME
-        order and the SAME mode. Otherwise index ``i`` means a different class
-        and the fused target is semantically invalid.
+        Required before fusing multiple teachers: agreement is computed
+        index-by-index, so groups, labels, label order and mode must all match,
+        otherwise index ``i`` means a different class.
 
         Raises:
             ValueError: on any mismatch (groups, order, labels, or mode).
@@ -399,5 +377,4 @@ class ReasoningTaxonomy:
                 )
 
 
-# Module-level default taxonomy instance — shared across the package.
 DEFAULT_TAXONOMY: ReasoningTaxonomy = ReasoningTaxonomy()

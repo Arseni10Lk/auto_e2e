@@ -1,23 +1,20 @@
-"""Deterministic partitioning of a dataset's groups for the map_task fan-out (#121 §3.3).
+"""Deterministic partitioning of a dataset's groups for the map_task fan-out.
 
-The episode-range fan-out (Design/pipeline_parallelization_design.md §3.2, option B)
-splits a dataset's GROUPS (L2D episodes / NVIDIA clips) into partitions; each
-partition is ingested → labeled → packed by its own pod. This module owns the
-split itself, kept as a PURE function (no Flyte, no network) so it is unit-testable
-and so the plan is reproducible: the same ``(group_ids, target_cost/partition_size)``
-always yields the SAME partitions, which is what makes Flyte cache hits stable
-across re-runs (§3.4a).
+The episode-range fan-out splits a dataset's groups (L2D episodes / NVIDIA
+clips) into partitions; each partition is ingested → labeled → packed by its own
+pod. The split is a pure function (no Flyte, no network), so the same
+``(group_ids, target_cost/partition_size)`` always yields the same partitions,
+which keeps Flyte cache hits stable across re-runs.
 
 Two split modes:
   * COUNT (smoke / default): a fixed ``partition_size`` groups per partition.
   * COST (production): accumulate consecutive groups until an estimated cost
-    threshold is hit, so uneven group sizes don't create lopsided pods. L2D has
-    ~190 frames/episode but very unevenly, and a fixed 10-ep unit over ~100k
-    episodes would spawn ~10k partitions × 3 stages — crushing the Flyte control
-    plane. Cost mode bounds per-partition work instead of per-partition count.
+    threshold is hit, so uneven group sizes don't create lopsided pods. L2D
+    episode lengths vary widely, and a fixed 10-episode unit over ~100k episodes
+    would spawn ~10k partitions × 3 stages and overload the Flyte control plane.
 
 A ``max_partitions`` guard makes a runaway fan-out (e.g. episodes=0 = all, at a
-tiny target_cost) fail LOUDLY rather than silently launching thousands of pods.
+tiny target_cost) fail loudly rather than silently launching thousands of pods.
 """
 
 from __future__ import annotations
@@ -41,9 +38,9 @@ class PartitionSpec(Generic[G]):
     """One unit of the fan-out: the groups a single pod-chain owns.
 
     ``index`` is the stable 0-based ordinal (for labeling map_task items / logs);
-    ``group_ids`` are the GLOBAL ids (episode indices / clip uuids), so the
+    ``group_ids`` are the global ids (episode indices / clip uuids), so the
     per-sample ``sample_uid`` a pod emits is independent of the partition
-    boundary (§3.1). ``est_cost`` is the accumulated estimate (0.0 in COUNT mode).
+    boundary. ``est_cost`` is the accumulated estimate (0.0 in COUNT mode).
     """
 
     index: int
@@ -56,7 +53,7 @@ class PartitionSpec(Generic[G]):
 
 @dataclass(frozen=True)
 class PartitionPlan(Generic[G]):
-    """The full plan + a human-readable summary for ``log()`` (§3.3)."""
+    """The full plan + a human-readable summary for ``log()``."""
 
     partitions: tuple[PartitionSpec[G], ...]
     mode: str  # "count" | "cost"
@@ -96,10 +93,9 @@ def plan_partitions(
     close the partition. A single group heavier than ``target_cost`` still forms
     its own partition (never dropped, never split — a group is the atomic unit).
 
-    Invariants (pinned by tests):
-      * every group appears in exactly ONE partition, in input order (coverage +
-        no overlap), so the union is the input and nothing is duplicated/lost;
-      * deterministic: same inputs → identical partitions (cache stability, §3.4a);
+    Invariants:
+      * every group appears in exactly one partition, in input order;
+      * deterministic: same inputs → identical partitions (cache stability);
       * ``len(partitions) <= max_partitions`` unless ``allow_large_fanout`` — else
         ValueError (no silent thousand-pod fan-out).
 
@@ -156,7 +152,7 @@ def _partition_by_cost(
     """Accumulate consecutive groups until running cost >= target (COST mode).
 
     A group is atomic: if adding it would exceed ``target`` but the current
-    partition is non-empty, the group starts a NEW partition; a single group
+    partition is non-empty, the group starts a new partition; a single group
     heavier than ``target`` forms its own (over-target) partition rather than
     being split or dropped.
     """

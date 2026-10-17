@@ -1,14 +1,12 @@
-"""1 Hz sequential multi-view windows for the World Model (#16, enables #13).
+"""1 Hz sequential multi-view windows for the World Model.
 
-The reactive model runs at 10 Hz on the *current* frame; the World Model runs at
-~1 Hz over a window of past frames and predicts *future* frame features (the JEPA
-feature-reconstruction loss, #13). This module turns a higher-rate frame source
-(L2D is 10 Hz) into the World Model's **past** and **future** windows by striding
-(``stride = round(source_hz / world_model_hz)`` — e.g. 10 at 10 Hz → 1 Hz).
+The reactive model runs at 10 Hz on the current frame; the World Model runs at
+~1 Hz over past frames and predicts future frame features (the JEPA loss). This
+module strides a higher-rate frame source into past and future windows
+(``stride = round(source_hz / world_model_hz)``, e.g. 10 for 10 Hz -> 1 Hz).
 
-It is **dataset-agnostic**: it takes a ``load_frame(row) -> [V, 3, H, W]``
-callable, so the windowing logic is unit-testable without the real (lerobot)
-L2D dataset. ``L2DDataset`` wires its own frame loader into ``build_windows``.
+It takes a ``load_frame(row) -> [V, 3, H, W]`` callable, so the windowing logic
+is independent of any dataset.
 """
 
 from __future__ import annotations

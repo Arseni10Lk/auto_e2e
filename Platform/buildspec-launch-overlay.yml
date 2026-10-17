@@ -108,10 +108,6 @@ phases:
         echo "Publishing immutable dataset coordinate ${PUBLISHED_DATASET}/${DATASET_VERSION}"
       - |
         if [ -n "${FULL_RUN_EXECUTION_ID}" ]; then
-          RECOVERY_FLAG=""
-          if [ -n "${SELECTED_CHECKPOINT_URI}" ]; then
-            RECOVERY_FLAG="--allow-running-recovery"
-          fi
           python3 Platform/scripts/extract_full_run_overlay_inputs.py \
             --config /tmp/flyte.yaml \
             --project "${FLYTE_PROJECT}" \
@@ -119,7 +115,6 @@ phases:
             --execution-id "${FULL_RUN_EXECUTION_ID}" \
             --expected-dataset "${DATASET}" \
             --expected-dataset-version "${DATASET_VERSION}" \
-            ${RECOVERY_FLAG} \
             --output /tmp/full-run-overlay-inputs.json
           if [ -n "${SELECTED_CHECKPOINT_URI}" ]; then
             pyflyte --config /tmp/flyte.yaml run --remote \

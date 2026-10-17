@@ -1,6 +1,6 @@
-# Trial Guide — Running AutoE2E Inference Test on AWS EC2
+# Trial Guide — Running AutoE2E Tests on AWS EC2
 
-This guide walks you through launching a GPU instance, setting up the environment, and running the inference test end-to-end.
+This guide walks you through launching a GPU instance, setting up the environment, and running the test suite end-to-end.
 
 ## Step 1: Launch an EC2 Instance
 
@@ -71,9 +71,9 @@ python3 -m venv ~/e2e-env
 source ~/e2e-env/bin/activate
 ```
 
-Install dependencies:
+Install dependencies with CUDA torch wheels (plain `make setup` installs CPU-only wheels):
 ```bash
-make setup
+make setup TORCH_CHANNEL=cu118
 ```
 
 This takes 2–3 minutes. Verify the installation:
@@ -83,49 +83,19 @@ python -c "import torch; print(f'PyTorch {torch.__version__}, CUDA available: {t
 
 Expected output:
 ```
-PyTorch 2.12.0, CUDA available: True
+PyTorch 2.7.1+cu118, CUDA available: True
 ```
 
-## Step 5: Run the Inference Test
+## Step 5: Run the Tests
 
 ```bash
 cd ~/auto_e2e
 make test
 ```
 
-## Expected Output
-
-```
-Using cuda for inference
-
----
-
-Trajectory Prediction:
-torch.Size([128])
-
----
-
-Compressed Current Scene Visual Feature Vector:
-torch.Size([14])
-
----
-
-Future Visual Features Prediction:
-torch.Size([8, 1440, 7, 7])
-torch.Size([8, 1440, 7, 7])
-torch.Size([8, 1440, 7, 7])
-torch.Size([8, 1440, 7, 7])
-
-COMPLETE
-```
-
-### Output Interpretation
-
-| Output | Shape | Description |
-|--------|-------|-------------|
-| Trajectory | `[128]` | 64 timesteps × (acceleration + curvature) at 10Hz = 6.4s future horizon |
-| Compressed Visual Feature | `[14]` | Compact scene representation stored in rolling visual history buffer |
-| Future Visual Features | `[8, 1440, 7, 7]` × 4 | Predicted future scene features at 1.6s intervals (4 predictions over 6.4s) |
+The run ends with a pytest summary reporting that all selected tests passed.
+For the model's inputs, outputs and forward signature, see the
+[Model architecture guide](./Model/).
 
 ## Step 6: Clean Up
 

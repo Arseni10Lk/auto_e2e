@@ -67,14 +67,14 @@ EKS Auto Mode-based MLOps platform for autonomous driving model training, evalua
 
 ### Why Not CARLA
 
-Originally planned CARLA Closed-Loop Simulation for Phase 5, but abandoned due to:
+CARLA closed-loop simulation is not used because:
 
 1. **Vulkan dependency**: CARLA requires Vulkan ICD, not available in Bottlerocket AMI
 2. **Incompatible with EKS Auto Mode**: nvidia-container-toolkit + Vulkan not supported on Bottlerocket
 3. **EC2 standalone unstable**: Worked on g5.xlarge but communication with EKS pods was unreliable
 4. **Adding Managed NG causes CNI conflicts**: vpc-cni addon makes Auto Mode nodes NotReady
 
-**Alternative**: Offline RL (IQL) — no simulator needed, learns from recorded data. NAVSIM (2D replay closed-loop) planned for future.
+**Alternative**: Offline RL (IQL) — no simulator needed, learns from recorded data.
 
 ### GPU Capacity Strategy
 
@@ -208,15 +208,15 @@ Flyte's internal storage library (stow/minio-go) uses AWS SDK v1 — does not su
 
 ---
 
-## Pipeline (All Verified E2E)
+## Pipeline
 
 ### Data Ingest
 
 ```
-HuggingFace Dataset → IngestAdapter → WebDataset (.tar shards) → S3
+HuggingFace Dataset → data_ingest → data_processing → WebDataset (.tar shards) → S3
 ```
 
-- **IngestAdapter protocol**: Supports L2D / NVIDIA Physical AI
+- **Sources**: L2D (lerobot), NVIDIA Physical AI (physical_ai_av), KITScenes
 - Decomposes each episode into JPEG frames + egomotion, packs into WebDataset shards
 - Output: `s3://auto-e2e-platform-datasets-{account}/{name}/{version}/shards/train-000000.tar`
 
@@ -275,12 +275,15 @@ All resources managed by Terraform under `Platform/infra/`. No hardcoded account
 | `vpc` | VPC, Private/Public Subnets x3 AZ, NAT Gateway |
 | `eks` | EKS Auto Mode, Cluster IAM, Node IAM, OIDC Provider, Pod Identity Agent |
 | `storage` | S3 buckets (datasets, artifacts), Pod Identity associations |
-| `rds` | PostgreSQL (db.t4g.micro), MLflow DB + Flyte DB |
+| `rds` | PostgreSQL (db.r6g.large), MLflow DB + Flyte DB |
 | `mlflow` | Helm release (S3 artifacts, RDS backend) |
 | `flyte` | Helm release (flyte-core), IAM User for S3 access |
 | `kueue` | Helm release, ResourceFlavor/ClusterQueue/LocalQueue |
 | `training-operator` | Kubeflow Training Operator v1.9.3 |
+| `ecr` | ECR repositories for the training, eval, offline-rl, and data-prep images |
 | `codebuild` | Docker image build + Flyte workflow registration (VPC) |
+| `cloudfront` | CloudFront distributions with VPC origins for the internal UIs |
+| `auth-edge` | Cognito user pool + Lambda@Edge auth for CloudFront |
 
 
 ### Deploy
@@ -297,6 +300,11 @@ terraform apply -var-file=environments/dev/terraform.tfvars \
 # Post-apply (kubeconfig + K8s resources)
 aws eks update-kubeconfig --name auto-e2e-platform --region us-west-2 --profile autowarefoundation
 
+# Default StorageClass (EKS Auto Mode ships none) and the `mlflow` database on
+# RDS (the RDS module creates only `flyteadmin`). post-apply.sh runs both
+# idempotently; manual equivalent of the first:
+kubectl apply -f ../k8s/storage-class.yaml
+
 # GPU NodeClasses and NodePools
 ACCOUNT=$(aws sts get-caller-identity \
   --profile autowarefoundation \
@@ -309,8 +317,9 @@ kubectl apply -f ../k8s/karpenter-nodepools/gpu-nodepool.yaml
 # Kueue config
 kubectl apply -f ../k8s/kueue-config/kueue-objects.yaml
 
-# Flyte S3 patch (required after every terraform apply)
-AWS_PROFILE=autowarefoundation ./post-apply-phase2.sh
+# StorageClass, mlflow database, quota and reservation checks, training image
+# push, GPU smoke-test Pod
+AWS_PROFILE=autowarefoundation ./post-apply.sh
 ```
 
 ### Cross-Account Migration
@@ -339,30 +348,39 @@ Platform/
 │   │   ├── kueue/                  Helm release
 │   │   ├── training-operator/      kubectl apply (kustomize)
 │   │   ├── codebuild/              Docker build
-│   │   └── ui-exposure/            CloudFront + ALB + Cognito
+│   │   ├── ecr/                    Image repositories
+│   │   ├── cloudfront/             CloudFront + VPC origins
+│   │   └── auth-edge/              Cognito + Lambda@Edge
 │   ├── environments/dev/
 │   ├── main.tf
 │   ├── variables.tf
-│   └── post-apply-phase2.sh
+│   ├── bootstrap.sh                Terraform state backend
+│   └── post-apply.sh
 │
-├── pipelines/                      Flyte workflows
-│   ├── data_ingest/
-│   │   ├── workflow.py
-│   │   └── adapters/               L2D, NVIDIA adapters
-│   ├── training/workflow.py
-│   ├── evaluation/workflow.py
-│   └── full_pipeline.py            Master pipeline
+├── infra-console/                  Data/model console ALB SG + CloudFront
+│
+├── pipelines/                      Flyte workflows and tasks
+│   ├── workflows.py                Ingest, labeling, packing, training, eval
+│   ├── distributed_training.py     Ray multi-GPU training
+│   ├── nuplan_acquisition.py
+│   ├── nuplan_dataset.py
+│   └── overlay*.py                 Trajectory overlays
+│
+├── scripts/                        Operator CLIs (p5en Capacity Blocks, ...)
+├── tests/
+├── buildspec*.yml                  CodeBuild image build, register, launch
 │
 ├── docker/
 │   ├── training/Dockerfile         PyTorch + timm + webdataset + mlflow-skinny
 │   └── data-prep/Dockerfile        lerobot + flytekit + ffmpeg
 │
 ├── helm-values/
-│   ├── mlflow.yaml
-│   └── flyte.yaml
+│   ├── flyte-core-eks.yaml
+│   ├── kueue.yaml
+│   └── mlflow.yaml
 │
 ├── k8s/                            Post-apply K8s manifests
-│   └── (GPU NodePool, Kueue config, TGB)
+│   └── (StorageClass, GPU NodeClass/NodePool, Kueue config, GPU smoke test)
 │
 └── README.md                       (this file)
 ```
@@ -376,7 +394,7 @@ Platform/
 - **ALB/NLB**: Internal only (not internet-facing)
 - **UI access**: CloudFront → VPC Origin → Internal ALB/NLB → Pod
 - **Auth**: Cognito User Pool (deployed on Flyte Console via Lambda@Edge). Credentials
-  are shared with Core Contributors only — ask Ryota Yamada. Never stored in git.
+  are shared with Core Contributors only — ask the maintainers. Never stored in git.
 - **SG design**:
   -   - CloudFront VPC Origin ENI SG → ALB/NLB SG (port 80)
   -   - ALB/NLB SG → EKS Cluster SG (service ports)
@@ -391,10 +409,10 @@ Platform/
 | g6.2xlarge validation ODCR (2 slots) | Region price |
 | p5en Capacity Block | Offering-specific upfront fee |
 | System nodes (3x c6a.large) | ~$180 |
-| RDS (db.t4g.micro) | ~$15 |
+| RDS (db.r6g.large) | Region price |
 | NAT Gateway | ~$35 |
 | S3 + CloudFront | ~$5 |
-| **Fixed subtotal** | **~$308/mo plus storage and GPU capacity** |
+| **Fixed subtotal** | **~$293/mo plus RDS, storage and GPU capacity** |
 
 GPU nodes scale to zero when idle. The validation ODCR remains active, while
 p5en capacity exists only for the purchased block window.

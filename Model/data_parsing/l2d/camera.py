@@ -3,11 +3,10 @@
 L2D provides 7 image views stored as MP4 videos in the LeRobot format:
     6 surround cameras + 1 BEV nav-map (640x360).
 
-The BEV map is NOT a camera: it is a raster prior already aligned to the ego/map
-frame, so it has no camera projection and must not be fused through the camera
-BEV spatial cross-attention. It is routed to the model's separate map branch
-(``map_input``) instead. Hence ``CAMERA_NAMES`` lists the 6 real cameras and the
-map is exposed separately via ``MAP_VIEW_NAME`` / ``NUM_VIEWS = 6``.
+The BEV map is a raster prior already aligned to the ego/map frame, so it has no
+camera projection and must not go through the camera BEV cross-attention. It is
+exposed separately via ``MAP_VIEW_NAME`` for the model's map branch, and
+``CAMERA_NAMES`` lists only the 6 real cameras.
 
 Camera extrinsics are provided in extrinsic_RDF.yaml. ``l2d.calibration`` uses
 the published vertical lens FOV to create a square-pixel source pinhole before
@@ -50,7 +49,7 @@ def load_camera_frames(
 
     Args:
         frames: Dict mapping camera key to HWC uint8 numpy array.
-        transform: torchvision transform (from timm backbone config).
+        transform: torchvision transform applied to each PIL image.
 
     Returns:
         Float tensor of shape (NUM_VIEWS, 3, H, W).

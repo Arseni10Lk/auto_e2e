@@ -1,8 +1,8 @@
-"""Tests for zero-init reasoning→planner coupling (issue #98, R7).
+"""Tests for zero-init reasoning→planner coupling.
 
 Synthetic tensors, no GPU / network. Covers, for both Bezier and Flow-matching:
     * reasoning_mode="none" is byte-identical to no reasoning input;
-    * pooled_latent and horizon_cross_attention are NO-OP at init (alpha=0),
+    * pooled_latent and horizon_cross_attention are no-ops at init (alpha=0),
       i.e. the trajectory equals the reasoning-off trajectory up to numerical
       tolerance;
     * after the gate is pushed off zero, the trajectory changes (coupling live);
@@ -25,7 +25,12 @@ B, EMBED, HZ = 3, 256, 5
 
 
 def _inputs(planner):
-    bev = torch.randn(B, EMBED, 8, 8)
+    # The Bezier planner consumes the pooled fused-BEV vector; the
+    # flow-matching planner still takes the spatial BEV map.
+    if isinstance(planner, BezierPlanner):
+        bev = torch.randn(B, planner.feature_dim)
+    else:
+        bev = torch.randn(B, EMBED, 8, 8)
     vis = torch.randn(B, 896)
     ego = torch.randn(B, 256)
     latent = torch.randn(B, EMBED)
@@ -57,6 +62,29 @@ def test_alpha_receives_gradient_at_init(mode):
     out.sum().backward()
     # But alpha still gets a real gradient so training can open the gate.
     assert c.alpha.grad is not None and float(c.alpha.grad.abs().sum()) > 0
+
+
+@pytest.mark.parametrize("mode", ["pooled_latent", "horizon_cross_attention"])
+def test_wider_context_dim_is_noop_at_init_and_trainable(mode):
+    """A context wider than the reasoning width (the Bezier planner's
+    concatenated context) keeps the no-op-at-init and live-gate guarantees."""
+    context_dim = 3 * EMBED + 7
+    c = ReasoningCoupling(EMBED, mode=mode, context_dim=context_dim)
+    ctx = torch.randn(2, context_dim, requires_grad=True)
+    latent = torch.randn(2, EMBED)
+    tokens = torch.randn(2, HZ, EMBED)
+    out = c(ctx, reasoning_latent=latent, horizon_tokens=tokens)
+    assert out.shape == ctx.shape
+    assert torch.allclose(out, ctx, atol=1e-6)
+    out.sum().backward()
+    assert c.alpha.grad is not None and float(c.alpha.grad.abs().sum()) > 0
+
+
+def test_default_context_dim_keeps_state_dict_keys():
+    """Planners whose context equals the reasoning width (GRU, flow matching)
+    must not gain a query projection, so their checkpoints still load."""
+    c = ReasoningCoupling(EMBED, mode="horizon_cross_attention")
+    assert not any(key.startswith("query_proj") for key in c.state_dict())
 
 
 @pytest.mark.parametrize("mode", ["pooled_latent", "horizon_cross_attention"])

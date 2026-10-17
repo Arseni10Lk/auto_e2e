@@ -4,13 +4,13 @@
 
 | Field | Value |
 |-------|-------|
-| Status | Historical proposal; superseded in production |
+| Status | Partially implemented: `BEVViewFusion` (`Model/model_components/view_fusion/bev_fusion.py`) is the only registered view-fusion mode. The Reactive model uses the pretrained BEVFormer V2 T8 fusion instead (`Model/model_components/reactive_e2e.py`, `Model/model_components/bevformer_v2_pretrained.py`). |
 | Authors | riita10069 |
 | Created | 2026-06-05 |
 | Related Issue | [#2 - Enhancement Proposal: Multi-Camera Feature Fusion](https://github.com/autowarefoundation/auto_e2e/issues/2) |
 
-> **Production note (2026-08-25):** The nuPlan/L2D Reactive training path uses
-> a different implementation from the historical `BEVViewFusion` below: the
+> **Reactive model fusion:** The nuPlan/L2D Reactive training path uses
+> a different implementation from the `BEVViewFusion` proposal below: the
 > pretrained ResNet-50 BEVFormer V2 T8 implementation with a four-level FPN.
 > Seven history frames at `-3.5, -3.0, ..., -0.5 s` are independently encoded
 > with frozen shared camera-BEV weights under `eval()` and `no_grad()`. Their
@@ -69,12 +69,12 @@
 > uses six layers and a `300 x 200` latent over the
 > `180 m x 120 m` `pc_range` (`0.6 m` per latent cell on both axes). The
 > `450 x 300` grid is the navigation and auxiliary-supervision raster in that
-> path, not its latent. This model revision changes the latent to `300 x 200`
-> and planner sampling from 8 to 16 points; both invalidate older checkpoints
-> through the architecture-version guard.
-> The sections below preserve the original pluggable-fusion proposal, where
-> `450 x 300` is the legacy module's latent, and are not normative for the
-> nuPlan/L2D Reactive module.
+> path, not its latent. The latent size and the 16-point planner sampling are
+> covered by the architecture-version guard, so checkpoints with different
+> values are rejected.
+> The sections below record the pluggable-fusion proposal, where `450 x 300`
+> is the `BEVViewFusion` latent, and are not normative for the nuPlan/L2D
+> Reactive module. Only the `bev` mode of that proposal remains registered.
 
 ---
 
@@ -552,16 +552,16 @@ ego_state_proj             visual_history_proj                    ▼
 
 ### 8.2 Design Rationale
 
-The previous head was an MLP over `flatten(Conv2d(1440, 3, 3, 1, 1))` of the fused feature map. That design discarded all spatial structure and was only justifiable at low BEV resolution; once BEV is increased to 450×300, flattening becomes prohibitive (~135 k spatial cells × 256 channels).
+An MLP head over `flatten(Conv2d(1440, 3, 3, 1, 1))` of the fused feature map discards all spatial structure and is only justifiable at low BEV resolution; at a 450×300 BEV, flattening becomes prohibitive (~135 k spatial cells × 256 channels).
 
-Replacing it with deformable cross-attention follows the same principle as in `BEVViewFusion`: instead of squashing the grid, learn *where* to look. Drawing on UniAD [2] and VAD [16], the planner is now a single-query autoregressive decoder — light enough to train end-to-end while still able to ground each waypoint in a small set of BEV locations selected per step.
+Replacing it with deformable cross-attention follows the same principle as in `BEVViewFusion`: instead of squashing the grid, learn *where* to look. Drawing on UniAD [2] and VAD [16], the planner is a single-query autoregressive decoder — light enough to train end-to-end while still able to ground each waypoint in a small set of BEV locations selected per step.
 
 **Key design choices:**
 
 1. **Single ego query (not multi-query)**: The model plans one ego trajectory, not many object tracks. A single learnable query is sufficient and keeps the head small. Multi-modal hypotheses can be added later by widening this query into a multi-query bank.
 2. **GRU instead of a Transformer decoder**: The temporal dependency is a strict left-to-right recurrence (waypoint t depends on waypoint t-1's implicit state). A GRU captures this with O(T) parameters instead of O(T²) attention compute, and avoids needing causal masking. AD-MLP [12] showed even an MLP on ego-status can plan; we keep the lightweight ethos but recover spatial grounding via the cross-attention loop.
 3. **`F.grid_sample` over deformable-DETR CUDA kernels**: Same portability rationale as `BEVViewFusion` (Section 7.2.4) — single-head sampling is enough to validate the architecture without locking the project into custom ops.
-4. **`ego_hidden` as the world-model handoff**: `FutureState` previously consumed a 14-dim summary that was discarded by the policy head. Threading the GRU's final hidden state instead gives `FutureState` access to the planner's full 256-dim trajectory-conditioned state — closer in spirit to MILE [14] / GAIA-1 [15], where the future-prediction module sees what the planner intends to do.
+4. **`ego_hidden` as the world-model handoff**: A 14-dim summary would be discarded by the policy head. Threading the GRU's final hidden state instead gives `FutureState` access to the planner's full 256-dim trajectory-conditioned state — closer in spirit to MILE [14] / GAIA-1 [15], where the future-prediction module sees what the planner intends to do.
 
 ### 8.3 Limitations
 
@@ -661,19 +661,25 @@ Following UniAD [2]:
 
 ### 11.1 File Structure
 
+Current files (the original proposal's `concat_fusion.py`,
+`view_fusion/cross_attention_fusion.py`, `trajectory_planner.py`,
+`future_state.py`, and `frozen_backbone.py` were not kept; the parameter counts
+in §11.2 for `ConcatViewFusion`, `CrossAttentionViewFusion`, `TrajectoryPlanner`,
+and `FutureState` describe that proposal):
+
 ```
 Model/model_components/
 ├── auto_e2e.py                        # Main model (num_views, fusion_mode params)
-├── backbone.py                        # Swin-Tiny
+├── reactive_e2e.py                    # Reactive model (pretrained BEVFormer V2 T8 fusion)
+├── backbone.py                        # build_backbone() wrapper over backbones/
 ├── feature_fusion.py                  # Multi-scale pool + dispatch to view_fusion
 ├── view_fusion/
-│   ├── __init__.py                    # FUSION_REGISTRY + build_view_fusion()
-│   ├── concat_fusion.py              # Mode "concat"
-│   ├── cross_attention_fusion.py     # Mode "cross_attn"
-│   └── bev_fusion.py                 # Mode "bev"
-├── trajectory_planner.py              # Ego-query GRU + deformable cross-attn to BEV
-├── future_state.py                    # Future feature prediction (conditioned on ego_hidden)
-└── frozen_backbone.py                 # For feature reconstruction loss
+│   ├── __init__.py                    # FUSION_REGISTRY ("bev" only) + build_view_fusion()
+│   ├── bev_fusion.py                 # Mode "bev"
+│   ├── projection.py                 # Camera projection operators for BEVViewFusion
+│   ├── bevformer_v2_t1.py            # BEVFormer V2 t1 encoder
+│   └── bevformer_v2_t8.py            # BEVFormer V2 T8 temporal fusion
+└── trajectory_planning/               # PLANNER_REGISTRY: flow_matching, bezier, gru
 ```
 
 ### 11.2 Parameter Counts (Approximate)

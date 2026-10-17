@@ -422,34 +422,34 @@ def extract_nuplan_archive(
             f"unsupported nuPlan archive format: {archive['archive_id']!r}"
         )
     with tarfile.open(archive_path, mode="r:*") as source:
-        members = source.getmembers()
+        tar_members = source.getmembers()
         member_parts = [
-            _safe_tar_member_parts(info) for info in members
+            _safe_tar_member_parts(tar_info) for tar_info in tar_members
         ]
         archive_map_version = map_version
         if archive["component"] == "maps":
             archive_map_version = _archive_map_version(member_parts)
-        for info, parts in zip(members, member_parts):
+        for tar_info, parts in zip(tar_members, member_parts):
             relative = _member_destination_from_parts(
                 parts,
                 archive,
-                is_directory=info.isdir(),
+                is_directory=tar_info.isdir(),
                 map_version=archive_map_version,
             )
             if relative is None:
                 continue
             target = (dataset_root / Path(*relative.parts)).resolve()
-            if info.isdir():
+            if tar_info.isdir():
                 target.mkdir(parents=True, exist_ok=True)
                 continue
-            input_stream = source.extractfile(info)
+            input_stream = source.extractfile(tar_info)
             if input_stream is None:
                 raise ValueError(
-                    f"failed to read TAR member: {info.name!r}"
+                    f"failed to read TAR member: {tar_info.name!r}"
                 )
             _write_archive_member(input_stream, target, dataset_root)
             file_count += 1
-            uncompressed_bytes += info.size
+            uncompressed_bytes += tar_info.size
     return {
         "archive_format": "tar",
         "file_count": file_count,

@@ -14,7 +14,6 @@ class Backbone(nn.Module):
         if input_profile not in {"imagenet", "bevformer_v2"}:
             raise ValueError(f"unknown backbone input profile {input_profile!r}")
 
-        # Pre-trained backbone (pluggable)
         self.backbone = build_backbone(backbone, pretrained=is_pretrained)
         self.backbone_name = backbone
         self.input_profile = input_profile
@@ -34,9 +33,6 @@ class Backbone(nn.Module):
             persistent=False,
         )
 
-        # Discover per-stage channel counts. feature_info is the timm convention
-        # and is preferred (no forward pass), but a custom backbone may not
-        # expose it; fall back to a one-shot dummy forward and read tensor shapes.
         self.feature_channels = self._infer_feature_channels()
         self.backbone_channels = sum(self.feature_channels)
         self.norm_eval = input_profile == "bevformer_v2"
@@ -67,9 +63,8 @@ class Backbone(nn.Module):
             if channels:
                 return channels
 
-        # Fallback: probe the backbone with a dummy input and sum the channel
-        # dim of each returned feature map. Assumes channels-first output
-        # (B, C, H, W) — the dominant convention for non-timm backbones.
+        # No timm feature_info: probe with a dummy input, assuming
+        # channels-first (B, C, H, W) outputs.
         try:
             param = next(self.backbone.parameters())
             device, dtype = param.device, param.dtype
@@ -113,11 +108,9 @@ class Backbone(nn.Module):
             )
         features = self.backbone(image)
 
-        # Detect channel layout per-feature-map from the actual tensor shape
-        # rather than the backbone name. timm's Swin variants return
-        # channels-last (B, H, W, C); ResNet/ConvNeXt return channels-first
-        # (B, C, H, W). Compare each feature map's shape against the channel
-        # count discovered at construction time and permute when needed.
+        # timm's Swin variants return channels-last (B, H, W, C); ResNet and
+        # ConvNeXt return channels-first. Detect the layout per feature map
+        # from its shape and permute to channels-first.
         permuted = []
         for f, expected_c in zip(features, self.feature_channels):
             if f.dim() == 4 and f.shape[1] != expected_c and f.shape[-1] == expected_c:
