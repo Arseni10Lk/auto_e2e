@@ -1,15 +1,12 @@
-"""Validation-split helpers for open-loop evaluation (#66 §4).
+"""Validation-split helpers for open-loop evaluation.
 
 L2D ships all episodes in a single "train" partition, so we define our own
-val split. The recommended design is a **geographic holdout** (reserve whole
-cities) to avoid the geographic/temporal leakage that inflates nuScenes
-planning numbers (Lilja et al., CVPR 2024); a simple episode-range split is an
-acceptable early-experiment fallback (per the proposal).
+val split. A geographic holdout (reserve whole cities) avoids the
+geographic/temporal leakage that inflates nuScenes planning numbers (Lilja et
+al., CVPR 2024); an episode-range split is an early-experiment fallback.
 
-Both helpers operate on plain indices / labels supplied by the caller — they do
-**not** read L2D metadata themselves. Pulling per-episode city labels from the
-dataset (for :func:`geographic_holdout_split`) is a separate metadata step and a
-follow-up; these functions just turn that information into train/val indices.
+The helpers operate on indices and labels supplied by the caller; they do not
+read L2D metadata themselves.
 """
 
 from __future__ import annotations
@@ -46,10 +43,6 @@ def geographic_holdout_split(
 ) -> tuple[list[int], list[int]]:
     """Hold out whole cities for validation (recommended, leakage-safe).
 
-    This is a **helper that requires episode-level city labels** supplied by the
-    caller (`episode_cities`, index-aligned with the dataset). Extracting those
-    labels from L2D metadata is a separate step (follow-up), not done here.
-
     Args:
         episode_cities: city label per episode (index-aligned).
         holdout_cities: cities to reserve for validation.
@@ -76,24 +69,21 @@ def long_tail_split(
     sample_scenarios: Sequence[Sequence[str]],
     long_tail_classes: Sequence[str],
 ) -> tuple[list[int], list[int]]:
-    """Stratify evaluation samples into long-tail vs nominal subsets (#98).
+    """Stratify evaluation samples into long-tail vs nominal subsets.
 
     Average open-loop metrics are dominated by ego status and nominal driving
     (Li et al., CVPR 2024 — "Is Ego Status All You Need?"), so the reasoning
     band must be measured on the long-tail subset, reported as the delta over
     an ego-status-only baseline (e.g. :func:`hold_last_action_baseline`).
 
-    Like the other helpers here, this operates on caller-supplied labels — one
-    sequence of active scenario class names per evaluation sample (from teacher
-    labels, L2D metadata, or KITScenes annotations); it does not read datasets.
-
     Args:
-        sample_scenarios: per-sample active scenario classes (index-aligned).
+        sample_scenarios: per-sample active scenario class names (index-aligned),
+            e.g. from teacher labels, L2D metadata, or KITScenes annotations.
         long_tail_classes: class names that define the long tail (e.g. the
             ``edge_case`` taxonomy group, or KITScenes' rare categories).
     Returns:
         ``(long_tail_indices, nominal_indices)`` — a sample lands in the
-        long-tail subset when ANY of its classes is in ``long_tail_classes``.
+        long-tail subset when any of its classes is in ``long_tail_classes``.
     Raises:
         ValueError: if ``long_tail_classes`` is empty.
     """

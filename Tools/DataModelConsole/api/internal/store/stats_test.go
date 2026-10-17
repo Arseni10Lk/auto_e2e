@@ -329,7 +329,7 @@ func TestConfBucket_Boundaries(t *testing.T) {
 }
 
 func TestSceneLabelRows_AllHorizons(t *testing.T) {
-	// The scene index MUST cover every horizon so it matches AggregateStats
+	// The scene index must cover every horizon so it matches AggregateStats
 	// (which counts all horizons): a value that appears only at a future horizon
 	// still renders a clickable bar, so it must be searchable. A value shared
 	// across horizons is de-duplicated to a single row.
@@ -337,7 +337,7 @@ func TestSceneLabelRows_AllHorizons(t *testing.T) {
 		SampleID: "s00000010",
 		Horizons: []LabelHorizon{
 			{RelationToEgo: "same_lane_ahead", HazardEvent: []string{"cut_in_risk", "collision_risk"}, Cause: []string{"cut_in_vehicle"}, LongitudinalResponse: "slow_down", LateralResponse: "turn_right", TacticalResponse: "wait", RuleResponse: "none", Confidence: 0.9},
-			// A distinct horizon-1 state MUST also contribute (the bar counts it).
+			// A distinct horizon-1 state must also contribute (the bar counts it).
 			{RelationToEgo: "crossing_path", HazardEvent: []string{"vru_collision_risk"}, Cause: []string{"pedestrian_crossing"}, LongitudinalResponse: "stop", LateralResponse: "keep_lane"},
 		},
 	}
@@ -360,7 +360,7 @@ func TestSceneLabelRows_AllHorizons(t *testing.T) {
 		{FieldLateralResponse, "turn_right"},
 		{FieldTacticalResponse, "wait"},
 		{FieldRuleResponse, "none"},
-		// horizon 1 (future-only values must be present now)
+		// horizon 1 (future-only values)
 		{FieldRelationToEgo, "crossing_path"},
 		{FieldHazardEvent, "vru_collision_risk"},
 		{FieldCause, "pedestrian_crossing"},

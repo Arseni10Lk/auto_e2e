@@ -4,7 +4,7 @@
 
 | Field | Value |
 |---|---|
-| Status | Accepted for implementation with the logged-XY fallback |
+| Status | Implemented with the logged-XY position target (`Model/training/losses/rollout_aligned_loss.py`, `Model/training/losses/control_rollout.py`, `Model/evaluation/checkpoint_selection.py`) |
 | Owner | riita10069 |
 | Created | 2026-07-26 |
 | Initial dataset | KITScenes navigation v3.2 |
@@ -52,7 +52,7 @@ L_total =
   + lambda_reasoning * L_reasoning_existing
 ```
 
-This PR changes only `L_planner`. The matched control and treatment freeze the
+This design changes only `L_planner`. The matched control and treatment freeze the
 same World Model, JEPA weight, Reasoning enable flag, and Reasoning weight. The
 initial matched configuration keeps `enable_world_model=true` and the existing
 JEPA weight. It neither adds a new Cosmos-derived loss nor changes the existing
@@ -379,9 +379,8 @@ alignment as evaluation.
 - `dt` must be finite and positive.
 - The output contains float32 positions, headings, and speeds.
 
-The existing differentiable route rollout currently promotes float32 controls
-to float64. It must be replaced or refactored to call the shared float32
-implementation.
+The differentiable route rollout calls the same shared float32
+implementation (`integrate_controls_torch`).
 
 ### 6.3 Known gradient limitation
 
@@ -524,7 +523,7 @@ L_i^{rollout}
 
 Reduction is intentionally unweighted over time. `path` aligns with ADE and
 `final` keeps an explicit FDE contribution. Multiple horizon anchors, temporal
-decay, and horizon-dependent scales are not introduced in this PR.
+decay, and horizon-dependent scales are not introduced in this design.
 
 ## 10. Target-Relative Constraint Loss
 

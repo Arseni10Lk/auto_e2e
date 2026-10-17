@@ -1,7 +1,6 @@
 // Player smoke test. Requires the dev/prod web server on :3000 and the Go API
 // on :8080 (reading real S3, AWS_PROFILE=autowarefoundation). Uses the NVIDIA
-// scene because its camera JPEGs are real; the L2D shard's camera frames are
-// known-black stale data.
+// scene for its non-blank camera JPEGs.
 //
 // Run: (servers up) npx playwright test
 import { test, expect, type Page } from "@playwright/test";
@@ -118,11 +117,9 @@ test("player renders real camera pixels, advances, and focuses", async ({ page }
   ).toHaveLength(0);
 });
 
-// Fill-rate regression: windowed contiguous fetch must let the buffer advance
-// at roughly real time. Before it, the player made ~6 tiny range GETs per
-// frame and the buffer filled well below 10Hz over a high-latency link, so
-// playback stalled for a long time before it looked smooth. We measure how far
-// the playhead advances over a fixed wall-clock window after pressing play.
+// Fill rate: windowed contiguous fetch must let the buffer advance at roughly
+// real time. We measure how far the playhead advances over a fixed wall-clock
+// window after pressing play.
 test("playback fills its buffer near real time (windowed fetch)", async ({
   page,
 }) => {
@@ -156,7 +153,7 @@ test("playback fills its buffer near real time (windowed fetch)", async ({
   ).toBeVisible();
   // Sample the playhead every 500ms for 5s; require monotonic, non-trivial
   // advance. Buffer-gating means it may briefly hold, but over 5s it should
-  // cover many frames — well beyond the ~1 frame/2s of the old per-image path.
+  // cover many frames.
   const samples: number[] = [];
   for (let i = 0; i < 10; i++) {
     await page.waitForTimeout(500);
@@ -167,10 +164,9 @@ test("playback fills its buffer near real time (windowed fetch)", async ({
   const end = samples[samples.length - 1];
   const advanced = end - start;
   const monotonic = samples.every((v, i) => i === 0 || v >= samples[i - 1]);
-  console.log(`fill-rate: start=${start} samples=${samples.join(",")} advanced=${advanced}`);
 
   expect(monotonic, "playhead advanced monotonically (no racing/rewind)").toBeTruthy();
-  // Over 5s of wall clock, expect at least 20 frames (2 fps) advanced — a low
-  // bar the old path failed and the windowed path clears with large margin.
+  // Over 5s of wall clock, expect at least 20 frames (2 fps) advanced, a low
+  // bar the windowed path clears with large margin.
   expect(advanced, "playhead advanced ≥20 frames in 5s").toBeGreaterThanOrEqual(20);
 });

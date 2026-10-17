@@ -164,7 +164,7 @@ FlyteExecution
 | Layer | Technology | Rationale |
 |-------|-----------|-----------|
 | Frontend | Next.js 15 (App Router), TypeScript, Tailwind CSS, shadcn/ui | SSR for SEO-free internal tool, rich component library |
-| API | Go 1.23, chi router, AWS SDK v2 | Low latency, small container, native S3 streaming |
+| API | Go 1.25, chi router, AWS SDK v2 | Low latency, small container, native S3 streaming |
 | Auth | CloudFront + Cognito (reuse existing auth-edge Lambda) | Consistent with Flyte/MLflow access |
 | Infra | EKS Auto Mode (existing cluster), Terraform | Already provisioned |
 | Observability | Structured JSON logs, /healthz, /readyz | K8s native |

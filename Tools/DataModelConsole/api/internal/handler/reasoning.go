@@ -217,6 +217,6 @@ func (h *ReasoningHandler) GetLabel(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Label files are JSON; pass through verbatim. The source S3 key is
-	// intentionally NOT exposed (bucket layout disclosure).
+	// intentionally not exposed (bucket layout disclosure).
 	writeRawJSON(w, http.StatusOK, body)
 }

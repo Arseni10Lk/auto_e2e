@@ -421,18 +421,15 @@ func (h *DatasetsHandler) GetNavigationMap(
 
 // GetBlob handles GET /api/v1/datasets/{name}/shards/{shard}/blob?offset=&size=.
 //
-// It streams one CONTIGUOUS byte range of the shard tar — spanning several
-// consecutive members (e.g. all camera JPEGs of a window of frames) — in a
-// single S3 range GET. The client slices the individual JPEGs back out using
-// the per-member offsets it already holds from the shard index. This collapses
-// the ~6-GETs-per-frame image traffic into one request per playback window,
-// which is what makes 10Hz playback fill its buffer over a high-latency link
-// (each round trip is amortized across many frames instead of paid per image).
+// It streams one contiguous byte range of the shard tar, spanning several
+// consecutive members (e.g. all camera JPEGs of a window of frames), in a
+// single S3 range GET. The client slices the JPEGs out using the per-member
+// offsets from the shard index, so 10Hz playback pays one round trip per
+// window instead of one per image.
 //
-// The bytes are opaque here (tar headers + JPEG payloads interleaved), so the
-// response is application/octet-stream; only the client, holding the index,
-// knows where each member sits. maxBlobBytes caps a single span so a bad
-// offset/size pair cannot ask the origin to stream an unbounded read.
+// The bytes are opaque (tar headers and JPEG payloads interleaved), so the
+// response is application/octet-stream. service.MaxRangeBytes (32 MiB) caps a
+// single span so a bad offset/size pair cannot request an unbounded read.
 func (h *DatasetsHandler) GetBlob(w http.ResponseWriter, r *http.Request) {
 	name := chi.URLParam(r, "name")
 	shard := chi.URLParam(r, "shard")

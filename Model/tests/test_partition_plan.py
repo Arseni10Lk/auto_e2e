@@ -1,10 +1,10 @@
-"""Deterministic fan-out partitioning (#121 Phase 2, §3.3).
+"""Deterministic fan-out partitioning.
 
 plan_partitions is the linchpin of the episode-range fan-out: it decides which
 groups each pod-chain owns. These tests pin the invariants the fan-out relies on,
 none of which need Flyte or video:
   * COVERAGE + NO OVERLAP: every group in exactly one partition, in input order;
-  * DETERMINISM: same inputs → identical partitions (Flyte cache stability, §3.4a);
+  * DETERMINISM: same inputs → identical partitions (Flyte cache stability);
   * COST mode bounds per-partition work, treating a group as atomic;
   * the max_partitions guard fails loud (no silent thousand-pod fan-out).
 """
@@ -57,7 +57,7 @@ def test_works_with_string_group_ids_nvidia_clips():
 
 def test_global_ids_preserved_not_renumbered():
     # A partition carries the GLOBAL episode ids (10,11,...), not 0-based — this
-    # is what keeps sample_uid partition-independent (§3.1).
+    # is what keeps sample_uid partition-independent.
     plan = plan_partitions([10, 11, 12, 13], partition_size=2)
     assert plan.partitions[0].group_ids == (10, 11)
     assert plan.partitions[1].group_ids == (12, 13)

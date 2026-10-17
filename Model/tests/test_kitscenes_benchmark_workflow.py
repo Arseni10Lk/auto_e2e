@@ -43,7 +43,6 @@ def test_training_workflows_do_not_invoke_benchmark_task():
     )
     for training_workflow in (
         workflows.wf_sharded_full_run,
-        workflows.wf_recovered_kitscenes_full_run,
         workflows.wf_train_il,
     ):
         assert benchmark_name not in {

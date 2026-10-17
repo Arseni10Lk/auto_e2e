@@ -1,6 +1,6 @@
-"""Tests for the World Action Model (slow branch, WG 2026-06-24 agreement).
+"""Tests for the World Action Model (slow branch).
 
-Verifies the per-tick API Zain specified in auto_e2e.py (lines 67-76):
+Verifies the per-tick API
 ``visual_embedding, future_state_pred = WorldActionModel(frame, visual_history)``,
 an external rolling FIFO buffer (size N=4) forming the Encoded Visual History
 (N*frame_embed_dim = 896), and the JEPA loss (frozen target, stop-gradient)
@@ -99,12 +99,12 @@ def test_world_action_model_view_aggregator(device, caplog):
 
 
 def test_forward_per_tick_returns_embedding_and_future(device):
-    """Zain's API: visual_embedding, future_state_pred = WAM(frame, visual_history)."""
+    """Per-tick API: visual_embedding, future_state_pred = WAM(frame, visual_history)."""
     m = _wam(device)
     vh = torch.randn(2, 896, device=device)              # current buffer state
     emb, future = m(_frame(2, device), visual_history=vh)
     assert emb.shape == (2, 224)                          # pushed to the buffer (history)
-    # future prediction = backbone feature maps [B, C, hw, hw] (Zain's #85 review)
+    # future prediction = backbone feature maps [B, C, hw, hw]
     assert len(future) == 4 and all(f.shape == (2, CH, 8, 8) for f in future)
 
 
@@ -158,7 +158,7 @@ class TestRollingHistoryBuffer:
 
 
 def test_online_loop_buffer_then_reactive_shape(device):
-    """End-to-end online pattern from Zain's auto_e2e wiring: per tick encode ->
+    """End-to-end online pattern: per tick encode ->
     push to buffer -> the buffer is the visual_history for the reactive planner."""
     m = _wam(device)
     buf = RollingHistoryBuffer(history_len=4)
@@ -196,7 +196,7 @@ class _MockBackbone4(nn.Module):
 
 
 class TestAutoE2EWorldModelWiring:
-    """Zain's auto_e2e.py wiring (lines 67-76): WAM -> buffer -> reactive; return
+    """AutoE2E wiring: WAM -> buffer -> reactive; return
     trajectory (infer) / (trajectory, future_state_pred) (train)."""
 
     def _build(self, device):

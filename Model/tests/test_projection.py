@@ -345,7 +345,7 @@ class TestFThetaProjection:
 
 class TestBuildFThetaFromCalibration:
     """build_ftheta_projection wires native (W,H) and a real FOV bound (max_theta
-    from r2th) — points 1 & 4 of the reviewer's feedback."""
+    from r2th)."""
 
     class _Model:
         def __init__(self, w, h):

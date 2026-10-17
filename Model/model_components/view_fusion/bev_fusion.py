@@ -34,13 +34,11 @@ class BEVViewFusion(nn.Module):
     geometry-guided 3D reference points projected onto each camera's
     image plane. No explicit depth prediction is needed.
 
-    This is a simplified single-head implementation that does not fully
-    replicate BEVFormer's multi-head deformable attention. It serves as
-    a functional BEV fusion module suitable for experimentation and as a
-    foundation for a full BEVFormer-style implementation.
+    This is a single-head implementation and does not replicate BEVFormer's
+    multi-head deformable attention.
 
     Geometry contract:
-        Geometry is a projection OPERATOR (see ``projection.py``), not a fixed
+        Geometry is a projection operator (see ``projection.py``), not a fixed
         ``[B, V, 3, 4]`` matrix. ``forward`` takes a ``projection``
         (:class:`CameraProjectionModel`) that maps ego-frame BEV reference points
         (X=forward, Y=left, Z=up, metres) to normalized sampling coordinates plus
@@ -48,14 +46,11 @@ class BEVViewFusion(nn.Module):
 
         - :class:`PinholeProjection` — the linear ``K @ T`` fast path.
         - :class:`FThetaProjection` — native fisheye (no rectification/FOV loss).
-        - :class:`PseudoProjection` — learnable calibration-free prior; NOT real
-          geometry. Requested explicitly via ``geometry_type="pseudo"``; the
-          module never falls into it on behalf of a caller that meant to pass
-          real calibration.
+        - :class:`PseudoProjection` — learnable calibration-free prior, not real
+          geometry; used when no operator is passed.
 
-        There is no ``camera_params`` matrix argument on ``forward`` — a pinhole
-        matrix is constructed by the caller as ``PinholeProjection(matrix)`` (or
-        ``PinholeProjection.from_KT(K, T)``) and passed as the operator.
+        A pinhole matrix is passed as ``PinholeProjection(matrix)`` (or
+        ``PinholeProjection.from_KT(K, T)``).
 
         The module is runtime-``V``-dynamic: one instance consumes batches of any
         camera count. ``num_views`` only sizes the default pseudo-prior expansion
@@ -79,46 +74,32 @@ class BEVViewFusion(nn.Module):
         self.num_points_in_pillar = num_points_in_pillar
         self.pc_range = pc_range
         self.image_size = image_size
-        # Model-input image frame the projection targets. A square shard/backbone
-        # input is the common case; a caller can override per forward with a
-        # non-square ImageTransform without changing the module.
+        # Model-input image frame the projection targets; overridable per forward
+        # with a non-square ImageTransform.
         self.image_transform = ImageTransform.square(image_size)
         _validate_offset_scale(offset_scale)
         self.offset_scale = offset_scale
 
-        # Learnable BEV queries: each grid cell gets its own query vector
         self.bev_queries = nn.Embedding(bev_h * bev_w, embed_dim)
 
-        # Fallback for testing/ablation when camera calibration is unavailable.
-        # This is NOT a substitute for real camera geometry — it provides a
-        # fixed learned spatial prior that allows the module to run without
-        # calibration data. For production use, pass a real projection operator.
-        #
-        # A single shared [3, 4] prior, expanded to V views at projection time
-        # (see PseudoProjection), so one instance serves ANY view count. Kept as
-        # the attribute name `pseudo_projection` and as a leaf Parameter so the
-        # optimizer trains it and gradient-flow expectations hold.
+        # Learned spatial prior for testing/ablation without calibration; not a
+        # substitute for real geometry. A single shared [3, 4] leaf Parameter,
+        # expanded to V views at projection time (see PseudoProjection).
         self.pseudo_projection = nn.Parameter(torch.randn(3, 4) * 0.01)
 
-        # Sampling offsets predicted from BEV queries
         self.sampling_offsets = nn.Linear(embed_dim, num_points_in_pillar * 2)
 
         # Attention weights over pillar points only (height-level relevance),
-        # shared across cameras and applied per-camera in the sampling loop.
-        # There is NO per-camera axis: camera-level weighting comes from
-        # visibility-based averaging (1/|V_hit|), matching BEVFormer's SCA, and a
-        # fixed per-camera-slot head is ill-defined once slots vary by dataset
-        # (L2D slot 3 != NVIDIA slot 3). Dropping the num_views factor is what
-        # makes the layer runtime-V-dynamic.
+        # shared across cameras. There is no per-camera axis: camera weighting
+        # comes from visibility-based averaging (1/|V_hit|), matching BEVFormer's
+        # SCA, and a per-camera-slot head is ill-defined when slot order varies
+        # by dataset. This keeps the layer runtime-V-dynamic.
         self.attention_weights = nn.Linear(embed_dim, num_points_in_pillar)
 
-        # Value projection applied to image features
         self.value_proj = nn.Linear(embed_dim, embed_dim)
 
-        # Output projection after attention
         self.output_proj = nn.Linear(embed_dim, embed_dim)
 
-        # Layer norm and FFN for post-attention processing
         self.norm1 = nn.LayerNorm(embed_dim)
         self.norm2 = nn.LayerNorm(embed_dim)
         self.ffn = nn.Sequential(
@@ -174,13 +155,10 @@ class BEVViewFusion(nn.Module):
         return ref_homo.reshape(-1, 4)                   # [N*num_z, 4]
 
     def _project_to_2d(self, reference_points_3d, camera_params=None):
-        """Project reference points to 2D — a test-only convenience wrapper.
+        """Project reference points to 2D; test-only wrapper, not public API.
 
-        NOT part of the public ABI (the public geometry contract is a projection
-        operator, see :meth:`forward`). A ``[B, V, 3, 4]`` ``camera_params``
-        matrix is treated as a :class:`PinholeProjection`; ``None`` uses the
-        pseudo prior. Kept because several unit tests probe the projection math
-        directly with a raw matrix.
+        A ``[B, V, 3, 4]`` ``camera_params`` matrix is treated as a
+        :class:`PinholeProjection`; ``None`` uses the pseudo prior.
 
         Returns:
             ref_2d: [B, V, N, num_z, 2] normalized coords
@@ -195,10 +173,9 @@ class BEVViewFusion(nn.Module):
     def _project_operator(self, reference_points_3d, projection, image_transform=None):
         """Project reference points using a :class:`CameraProjectionModel`.
 
-        ``V`` is derived from the operator (``projection.num_views``), never from
-        the construction-time ``self.num_views`` — this is what makes the module
-        runtime-``V``-dynamic. Uses the module's default ``image_transform`` (the
-        model-input frame) unless one is supplied.
+        ``V`` is derived from the operator, not the construction-time
+        ``self.num_views``. Uses the module's default ``image_transform`` unless
+        one is supplied.
 
         Returns ``(ref_2d, mask)`` reshaped to ``[Bp, V, N, num_z, ...]``.
         """
@@ -214,16 +191,11 @@ class BEVViewFusion(nn.Module):
         return ref_2d, mask
 
     def _resolve_projection(self, projection, geometry_type, V):
-        """Turn (projection | geometry_type) into a single projection operator,
-        enforcing honest geometry.
+        """Resolve ``projection``/``geometry_type`` into one projection operator.
 
-        Rules:
-          - a supplied operator must match the runtime view count V.
-          - `geometry_type`, if given, must be a valid label and must agree with
-            the operator actually supplied — you cannot label a pseudo run
-            "pinhole". When no operator is supplied, only "pseudo" (or None) is
-            allowed, so the calibration-free path is never entered on behalf of a
-            caller that meant to pass real calibration.
+        A supplied operator must match the runtime ``V`` and any given
+        ``geometry_type``. Without an operator only ``"pseudo"`` (or None) is
+        accepted, so a caller claiming real geometry never gets the pseudo prior.
         """
         if geometry_type is not None and geometry_type not in VALID_GEOMETRY_TYPES:
             raise ValueError(
@@ -243,8 +215,6 @@ class BEVViewFusion(nn.Module):
                 )
             return projection
 
-        # No operator supplied → calibration-free pseudo prior, but only if the
-        # caller did not claim real geometry.
         if geometry_type is not None and geometry_type != GEOMETRY_PSEUDO:
             raise ValueError(
                 f"geometry_type={geometry_type!r} requires a projection operator, "
@@ -259,16 +229,12 @@ class BEVViewFusion(nn.Module):
             fused_per_view: [B*V, C, H, W] multi-view image features
             B: batch size
             V: number of views (runtime; the module is V-dynamic)
-            projection: a CameraProjectionModel (Pinhole / FTheta / Pseudo) — the
-                general geometry ABI. Its `num_views` must equal V. This is the
-                public geometry contract; there is no `[B,V,3,4]` matrix argument
-                (a pinhole matrix lives inside PinholeProjection).
-            geometry_type: optional explicit geometry label ("pinhole",
-                "rectified_pinhole", "ftheta", "pseudo"). Must be consistent with
-                the supplied operator; the module never claims real geometry
-                without an operator, nor silently downgrades to the pseudo prior.
-                When no `projection` is given, the pseudo prior is used (and
-                `geometry_type`, if named, must be "pseudo").
+            projection: a CameraProjectionModel (Pinhole / FTheta / Pseudo).
+                Its `num_views` must equal V.
+            geometry_type: optional geometry label ("pinhole",
+                "rectified_pinhole", "ftheta", "pseudo") that must match the
+                supplied operator. Without `projection` the pseudo prior is
+                used and the label, if given, must be "pseudo".
             image_transform: optional ImageTransform describing the model-input
                 image frame; defaults to the module's square input.
 
@@ -279,78 +245,62 @@ class BEVViewFusion(nn.Module):
         N = self.bev_h * self.bev_w
         dtype = fused_per_view.dtype
 
-        # --- 0. Resolve the projection operator (explicit, honest geometry) ---
         proj_op = self._resolve_projection(projection, geometry_type, V)
 
-        # --- 1. Prepare BEV queries ---
         queries = self.bev_queries.weight.unsqueeze(0).expand(B, -1, -1)  # [B, N, C]
 
-        # --- 2. Prepare image features as values ---
         feat = fused_per_view.reshape(B, V, C, H * W).permute(0, 1, 3, 2)  # [B, V, H*W, C]
         values = self.value_proj(feat)  # [B, V, H*W, C]
 
-        # --- 3. Project 3D reference points to 2D ---
+        # ref_2d: [Bp, V, N, num_z, 2], mask: [Bp, V, N, num_z]; Bp is 1 for
+        # the batch-independent pseudo prior.
         ref_2d, mask = self._project_operator(self.reference_points_3d, proj_op, image_transform)
-        # ref_2d: [Bp, V, N, num_z, 2], mask: [Bp, V, N, num_z]
-        # (Bp is B for calibrated cameras, 1 for the batch-independent pseudo
-        #  prior — it broadcasts across the batch in the sampling loop below.)
 
-        # --- 4. Predict sampling offsets and attention weights from queries ---
         offsets = self.sampling_offsets(queries)  # [B, N, num_z * 2]
         offsets = offsets.reshape(B, N, self.num_points_in_pillar, 2)
         offsets = offsets * self.offset_scale  # Scale down for stability
 
-        # Attention weights over pillar points only (height relevance), shared
-        # across cameras (no per-camera axis — see __init__). Camera-level
-        # weighting is visibility-based averaging (1/|V_hit|), BEVFormer's SCA.
+        # Shared across cameras; see __init__.
         attn_weights = self.attention_weights(queries)  # [B, N, num_z]
         attn_weights = attn_weights.softmax(dim=-1)      # over pillar points
 
-        # --- 5. Sample features from each camera via grid_sample ---
         values_spatial = values.permute(0, 1, 3, 2).reshape(B * V, C, H, W)
 
         output = torch.zeros(B, N, C, device=fused_per_view.device, dtype=dtype)
         visible_count = torch.zeros(B, N, 1, device=fused_per_view.device, dtype=dtype)
 
         for v_idx in range(V):
-            # Per-view projection. ref_2d/mask have batch dim Bp (B for real
-            # cameras, 1 for the pseudo prior); expand a size-1 batch to B so it
-            # broadcasts uniformly across the batch.
+            # Expand a size-1 (pseudo prior) batch to B.
             ref_2d_v = ref_2d[:, v_idx]   # [Bp, N, num_z, 2]
             ref_mask = mask[:, v_idx]     # [Bp, N, num_z]
             if ref_2d_v.shape[0] == 1 and B > 1:
                 ref_2d_v = ref_2d_v.expand(B, -1, -1, -1)
                 ref_mask = ref_mask.expand(B, -1, -1)
 
-            # Sampling locations: reference + offset
             sample_locs = ref_2d_v + offsets  # [B, N, num_z, 2]
 
-            # Recompute visibility mask AFTER adding offsets
+            # Recompute visibility after adding offsets.
             sample_in_bounds = (sample_locs[..., 0] >= 0) & (sample_locs[..., 0] <= 1) & \
                                (sample_locs[..., 1] >= 0) & (sample_locs[..., 1] <= 1)
             combined_mask = ref_mask & sample_in_bounds  # [B, N, num_z]
 
-            # Convert [0, 1] to grid_sample's [-1, 1] range
             sample_grid = sample_locs * 2 - 1  # [B, N, num_z, 2]
 
-            # Sample from value-projected features
             feat_v = values_spatial.reshape(B, V, C, H, W)[:, v_idx]  # [B, C, H, W]
             sampled = F.grid_sample(
                 feat_v, sample_grid, mode='bilinear',
                 padding_mode='zeros', align_corners=False
             )  # [B, C, N, num_z]
 
-            # Apply per-point mask and re-normalize weights over valid points.
-            # attn_weights is camera-independent [B, N, num_z] (shared per view).
+            # Re-normalize the shared weights over this view's valid points.
             point_mask = combined_mask.float()  # [B, N, num_z]
             w = attn_weights * point_mask
-            w = w / w.sum(dim=-1, keepdim=True).clamp(min=1e-8)  # Re-normalize
+            w = w / w.sum(dim=-1, keepdim=True).clamp(min=1e-8)
 
-            # sampled: [B, C, N, num_z] → [B, N, num_z, C]
-            sampled = sampled.permute(0, 2, 3, 1)
+            sampled = sampled.permute(0, 2, 3, 1)  # [B, N, num_z, C]
             weighted = (sampled * w.unsqueeze(-1)).sum(dim=2)  # [B, N, C]
 
-            # Camera is visible if ANY pillar point is valid
+            # A camera sees a cell if any pillar point is valid.
             cam_visible = combined_mask.any(dim=-1).float().unsqueeze(-1)  # [B, N, 1]
             output = output + weighted * cam_visible
             visible_count = visible_count + cam_visible
@@ -358,18 +308,16 @@ class BEVViewFusion(nn.Module):
         # Average across visible cameras (matches BEVFormer's 1/|V_hit|)
         output = output / visible_count.clamp(min=1.0)
 
-        # --- 6. Post-attention: residual + LayerNorm + FFN ---
         output = queries + self.output_proj(output)
         output = self.norm1(output)
         output = output + self.ffn(output)
         output = self.norm2(output)
 
-        # Zero out BEV cells with no visible camera observations.
-        # Applied AFTER LayerNorm+FFN so that their biases don't override the mask.
+        # Zero cells no camera observes; applied after LayerNorm+FFN so their
+        # biases don't override the mask.
         has_observation = (visible_count > 0).float()  # [B, N, 1]
         output = output * has_observation
 
-        # --- 7. Reshape to spatial BEV grid ---
         bev_features = output.reshape(B, self.bev_h, self.bev_w, C).permute(0, 3, 1, 2)
 
         return bev_features

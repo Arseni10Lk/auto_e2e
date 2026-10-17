@@ -3,7 +3,7 @@
 // EpisodePlayer: orchestrates FrameStore + usePlayback + camera mosaic +
 // timeline scrubber + BEV trajectory + reasoning panel for one shard.
 //
-// Keyboard-first (bindings on the container, not window):
+// Keyboard shortcuts:
 //   Space        play/pause
 //   ArrowLeft/Right  step one frame
 //   , / .        step one frame back/forward
@@ -136,8 +136,7 @@ function medianTrajectory(paths: TrajectoryPoint[][]): TrajectoryPoint[] {
 function nextSpeed(current: number, dir: 1 | -1): number {
   // Pick the nearest preset strictly in the requested direction. This is
   // correct whether `current` is on a preset (steps to the neighbor) or off it
-  // (e.g. ?speed=3): "faster" from 3 gives 4, not 8. The old index+dir jumped
-  // past the immediately-higher preset for off-preset values.
+  // (e.g. ?speed=3): "faster" from 3 gives 4, not 8.
   if (dir === 1) {
     const next = SPEED_STEPS.find((s) => s > current + 1e-9);
     return Math.min(MAX_SPEED, next ?? current);
@@ -386,7 +385,7 @@ export function EpisodePlayer({
   const [focusCam, setFocusCam] = useState(Math.max(0, initialState?.cam ?? 0));
   useEffect(() => {
     if (initialState?.speed) setSpeed(initialState.speed);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- apply the initial speed once on mount
   }, []);
 
   // Report view state upward (URL serialization is the page's job).
@@ -425,10 +424,8 @@ export function EpisodePlayer({
   // Buffer-health-driven refill: while playing, keep the next few window buffers
   // fetched ahead of the playhead on a steady tick. The prefetch effect above
   // fires only on `frame` change, but the buffer-gated clock FREEZES `frame`
-  // when the buffer starves — so without this the refill would never re-fire and
-  // playback stalls (measured: 2.3fps, buffer draining faster than it refilled).
-  // A steady tick keeps MAX_INFLIGHT window GETs saturated regardless of whether
-  // the clock is advancing. Runs only during playback (no steady-state cost).
+  // when the buffer starves, so without this the refill would never re-fire and
+  // playback stalls. Runs only during playback.
   useEffect(() => {
     if (!store || !playing) return;
     const tick = () => {

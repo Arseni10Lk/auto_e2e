@@ -28,7 +28,7 @@ func NewFlyteHandler(svc *service.FlyteService) *FlyteHandler {
 
 // Executions handles GET /api/v1/flyte/executions, normalizing the nested
 // Flyte Admin {"executions":[{id,closure,spec}]} shape into the flat list the
-// frontend consumes (a raw pass-through rendered blank/crashed).
+// frontend consumes.
 func (h *FlyteHandler) Executions(w http.ResponseWriter, r *http.Request) {
 	limit, ok := parseFlyteLimit(r)
 	if !ok {
@@ -75,8 +75,7 @@ func (h *FlyteHandler) Execution(w http.ResponseWriter, r *http.Request) {
 		writeRawJSON(w, res.Status, res.Body)
 		return
 	}
-	// The get-by-id endpoint returns an unwrapped Execution ({id,closure,spec}),
-	// so normalize it to the flat shape too (the list handler already does).
+	// The get-by-id endpoint returns an unwrapped Execution ({id,closure,spec}).
 	out, nerr := model.NormalizeFlyteExecution(res.Body)
 	if nerr != nil {
 		slog.Error("normalize flyte execution", "error", nerr)

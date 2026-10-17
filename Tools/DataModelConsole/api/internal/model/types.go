@@ -44,7 +44,7 @@ type DatasetListResponse struct {
 }
 
 // DatasetVersion is one packed shard-set version of a dataset (e.g. l2d/v2.0),
-// summarising the WHOLE training composition at that version. Fields sourced
+// summarising the whole training composition at that version. Fields sourced
 // from the version's shards/manifest.json; SizeBytes/Shards are computed from a
 // ListObjects sum so a manifest-less (historical v1.0) version still reports.
 type DatasetVersion struct {
@@ -353,15 +353,11 @@ type HealthResponse struct {
 	Checks map[string]string `json:"checks,omitempty"`
 }
 
-// ---------------------------------------------------------------------------
-// Reasoning-label statistics (precomputed, cached in DynamoDB).
-//
-// These describe the ODD a (dataset x version x prompt_version) reasoning-label
-// set actually covers: the categorical distribution of each taxonomy axis
-// aggregated across ALL horizons of ALL labels, plus a confidence histogram.
-// The v2 context axes (weather, geo, road topology, ...) are NULL in the data,
-// so they are intentionally NOT represented here — only what exists.
-// ---------------------------------------------------------------------------
+// Reasoning-label statistics, precomputed and cached in DynamoDB, describe the
+// ODD a (dataset x version x prompt_version) label set covers: the categorical
+// distribution of each taxonomy axis across all horizons of all labels, plus a
+// confidence histogram. The v2 context axes (weather, geo, road topology, ...)
+// are NULL in the data, so they are not represented here.
 
 // HistogramBucket is one bucket of a value-count histogram (confidence, speed).
 type HistogramBucket struct {

@@ -1,4 +1,4 @@
-"""Unit tests for the optional 1 Hz history encoder (Issue #20).
+"""Unit tests for the optional 1 Hz history encoder.
 
 HistoryEncoder compresses the 10 Hz past sequence to ~1 Hz
 (coarser-in-time, richer-in-feature) and summarises it into a context
@@ -6,14 +6,8 @@ vector. It encodes the PAST — it is not a planner — and does not touch
 AutoE2E's forward contract.
 """
 
-import os
-import sys
-
 import pytest
 import torch
-
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-
 import torch.nn as nn
 
 from model_components.temporal_memory.one_hz_encoder import HistoryEncoder, OneHzHistoryEncoder
@@ -25,7 +19,8 @@ class _MockBackbone(nn.Module):
 
     def __init__(self, backbone="swin_v2_tiny", is_pretrained=True, **kwargs):
         super().__init__()
-        self.backbone_channels = 1440
+        self.feature_channels = [96, 192, 384, 768]
+        self.backbone_channels = sum(self.feature_channels)
         self._stages = nn.ModuleList([
             nn.Sequential(nn.Conv2d(3, 96, 3, 1, 1), nn.AdaptiveAvgPool2d(64)),
             nn.Sequential(nn.Conv2d(96, 192, 3, 1, 1), nn.AdaptiveAvgPool2d(32)),
@@ -126,10 +121,6 @@ def test_keeps_most_recent_frames_when_length_not_multiple_of_ratio():
     must be dropped (zero gradient) and every most-recent frame must receive
     gradient. History is ordered oldest -> most recent, so this guarantees
     the most informative (recent) 0.x s of the past are never discarded.
-
-    Regression test: the previous implementation let the strided Conv1d drop
-    the trailing window, i.e. with T=64/ratio=10 the most RECENT frames
-    60-63 had exactly zero gradient.
     """
     encoder = HistoryEncoder(
         input_dim=INPUT_DIM, hidden_dim=HIDDEN_DIM, subsample_ratio=10,

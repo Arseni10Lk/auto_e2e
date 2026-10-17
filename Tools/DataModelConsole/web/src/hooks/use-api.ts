@@ -52,7 +52,7 @@ export function useApi<T>(
     return () => {
       cancelled = true;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- caller-supplied deps
   }, [...deps, enabled, generation]);
 
   const reload = useCallback(() => setGeneration((g) => g + 1), []);

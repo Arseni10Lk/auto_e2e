@@ -1,18 +1,8 @@
-"""Optional encoder of the PAST visual/ego history (Issue #20).
+"""Optional encoder of the past visual/ego history.
 
-Addresses the "Visual Scene History too small" feedback (Zain, 03/06):
-instead of feeding the planner a long, thin 10 Hz history, this module
-compresses the past to a coarser-in-time / richer-in-feature representation
-at ~1 Hz, then summarises it into a single context vector. Slower temporal
-granularity over the past reduces decision flicker while keeping the
-per-step feature capacity high.
-
-Scope note: this is an ENCODER of history (the past), NOT a trajectory
-planner — it is deliberately distinct from the future-rollout
-``gru_planner`` proposed in PR #51, which decodes future waypoints. The
-output of this module is a context vector intended as an additional
-(optional) conditioning input; it does not modify AutoE2E's default
-forward pass or its 3-tuple return contract.
+Compresses a 10 Hz history to a coarser-in-time, richer-in-feature ~1 Hz
+sequence and summarises it into a single context vector. This encodes the
+past only; future waypoints are decoded by the trajectory planners.
 """
 
 import torch
@@ -27,13 +17,11 @@ class HistoryEncoder(nn.Module):
     Pipeline:
       1. Temporal compression: non-overlapping Conv1d with
          ``kernel=stride=subsample_ratio`` pools each ``subsample_ratio``-step
-         window (e.g. 10 steps at 10 Hz -> 1 step at 1 Hz) while EXPANDING the
-         feature dimension to ``hidden_dim`` (coarser in time, richer in
-         feature). The history is assumed to be ordered oldest -> most
-         recent; when ``T`` is not a multiple of the ratio, the OLDEST
-         ``T % subsample_ratio`` steps are dropped (left-trim) so that the
-         pooling windows stay aligned to the present and the most recent
-         frames are always kept.
+         window (e.g. 10 steps at 10 Hz -> 1 step at 1 Hz) while projecting
+         the features to ``hidden_dim``. The history is ordered oldest -> most
+         recent; when ``T`` is not a multiple of the ratio, the oldest
+         ``T % subsample_ratio`` steps are dropped so the windows stay aligned
+         to the present.
       2. Sequence summarisation: a GRU over the ~1 Hz sequence; the final
          hidden state is the history context.
 
@@ -60,7 +48,6 @@ class HistoryEncoder(nn.Module):
         self.input_hz = input_hz
         self.output_hz = input_hz / subsample_ratio
 
-        # Non-overlapping temporal pooling with feature expansion.
         self.temporal_compress = nn.Conv1d(
             input_dim, hidden_dim,
             kernel_size=subsample_ratio, stride=subsample_ratio,
@@ -68,7 +55,6 @@ class HistoryEncoder(nn.Module):
         self.activation = nn.GELU()
         self.norm = nn.LayerNorm(hidden_dim)
 
-        # Summarise the low-rate sequence into a single context vector.
         self.gru = nn.GRU(hidden_dim, hidden_dim, batch_first=True)
 
     def compressed_length(self, T: int) -> int:
@@ -79,10 +65,7 @@ class HistoryEncoder(nn.Module):
         """Temporal compression only: [B, T, input_dim] -> [B, T', hidden_dim]
         with ``T' = T // subsample_ratio``.
 
-        Assumes ``history`` is ordered oldest -> most recent. If ``T`` is not
-        a multiple of ``subsample_ratio``, the leading (oldest)
-        ``T % subsample_ratio`` steps are dropped so the most recent frames
-        always contribute to the output.
+        The oldest ``T % subsample_ratio`` steps are dropped.
         """
         B, T, _ = history.shape
         if T < self.subsample_ratio:
@@ -90,8 +73,6 @@ class HistoryEncoder(nn.Module):
                 f"History length {T} is shorter than subsample_ratio "
                 f"{self.subsample_ratio}; need at least one full window."
             )
-        # Left-trim the remainder: keep the most recent frames (the history
-        # is oldest -> most recent), discarding only the oldest leftovers.
         remainder = T % self.subsample_ratio
         if remainder:
             history = history[:, remainder:, :]
@@ -117,16 +98,15 @@ class HistoryEncoder(nn.Module):
 
 
 class OneHzHistoryEncoder(BaseTemporalMemory):
-    """Applies the 1 Hz HistoryEncoder to both visual and egomotion streams.
-    
-    Acts as a bridge between the [B, T, feat] sequence pipeline and the 1 Hz compression
-    baseline, concatenating features for joint temporal compression.
+    """Jointly compress concatenated visual and egomotion histories at 1 Hz.
+
+    Flat ``[B, feat]`` inputs are passed through unchanged.
     """
     def __init__(self, visual_dim=896, egomotion_dim=256, subsample_ratio=10, input_hz=10.0):
         super().__init__()
         self.visual_dim = visual_dim
         self.egomotion_dim = egomotion_dim
-        
+
         joint_dim = visual_dim + egomotion_dim
         self.encoder = HistoryEncoder(
             input_dim=joint_dim,
@@ -134,19 +114,15 @@ class OneHzHistoryEncoder(BaseTemporalMemory):
             subsample_ratio=subsample_ratio,
             input_hz=input_hz
         )
-        
+
     def forward(self, visual_history, egomotion_history, **kwargs):
-        # Flatten if passed without time dimension (fallback)
         if visual_history.ndim == 2:
             return visual_history, egomotion_history
-            
-        # Concat along feature dim: [B, T, visual_dim + egomotion_dim]
+
+        # [B, T, visual_dim + egomotion_dim] -> [B, visual_dim + egomotion_dim]
         joint_history = torch.cat([visual_history, egomotion_history], dim=-1)
-        
-        # Compress to 1 Hz: [B, visual_dim + egomotion_dim]
         joint_context = self.encoder(joint_history)
-        
-        # Split back
+
         v_ctx = joint_context[:, :self.visual_dim]
         e_ctx = joint_context[:, self.visual_dim:]
         return v_ctx, e_ctx

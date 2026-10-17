@@ -1,8 +1,8 @@
-"""Artifact I/O for reasoning labels (issue #98, R4).
+"""Artifact I/O for reasoning labels.
 
 Writes versioned label artifacts: JSONL for debugging (always available, stdlib)
 and Parquet for training (when ``pyarrow`` is present). Records are flattened to
-one row PER (sample, horizon) with full provenance so training can filter and
+one row per (sample, horizon) with full provenance so training can filter and
 source-weight. Abstained records write a single provenance row (no horizons) so
 the failure is visible in the artifact rather than dropped.
 """
@@ -65,11 +65,10 @@ def write_jsonl(records: Sequence[ReasoningLabelRecord], path: str) -> str:
 
 
 def write_parquet(records: Sequence[ReasoningLabelRecord], path: str) -> str:
-    """Write a Parquet table of per-horizon rows (requires pyarrow).
+    """Write a Parquet table of per-horizon rows.
 
-    Raises ImportError with a clear message if pyarrow is unavailable so a
-    contributor knows to use JSONL (or install the extra) rather than hitting
-    an opaque failure.
+    Raises:
+        ImportError: if pyarrow is unavailable.
     """
     try:
         import pyarrow as pa

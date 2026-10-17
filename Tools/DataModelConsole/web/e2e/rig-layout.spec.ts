@@ -125,7 +125,7 @@ test("NVIDIA and L2D rigs are unchanged (still 3x3, ego cell free)", () => {
 test("displayAspectRatio matches the packed image shape per dataset", () => {
   // KITScenes cameras are packed 256x256 (1:1).
   expect(displayAspectRatio("kitscenes")).toBe(1);
-  // Others keep the 16:9 default (unchanged layout).
+  // Others keep the 16:9 default.
   expect(displayAspectRatio("nvidia_av")).toBeCloseTo(16 / 9, 6);
   expect(displayAspectRatio("l2d")).toBeCloseTo(16 / 9, 6);
   expect(displayAspectRatio("unknown")).toBeCloseTo(16 / 9, 6);

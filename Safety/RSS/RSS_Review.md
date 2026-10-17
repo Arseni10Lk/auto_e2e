@@ -364,13 +364,15 @@ demo.
 
 ## 12. Where to Solidify the Architecture for Safety
 
-**12.1 Close the reasoning-band confidence loop first.** Issue #103 asked for
-horizon/region-aware confidence alongside scenario classification. PR #108 implements
-containment correctly (zero-init gate, defaults safe) — but the confidence output is
-currently **unsupervised and unconsumed by the planner**: structurally correct, functionally
-dead. This is the single highest-leverage safety item: it's exactly the signal the §10.1
-envelope needs. Recommend sequencing the follow-up issues (supervise the output;
-region/spatial stratification) as a definition of done ahead of or alongside M2.
+**12.1 Close the reasoning-band confidence loop first.** The reasoning band adds
+horizon/region-aware confidence alongside scenario classification, with correct
+containment (zero-init gate, defaults safe). The confidence output is now supervised
+(`HorizonReasoningLoss` adds a Brier term on the per-horizon confidence head,
+`lambda_confidence=0.05`, for batches carrying reasoning labels when `enable_reasoning` is
+set) but is still **unconsumed by the planner**. This is the single highest-leverage safety
+item: it's exactly the signal the §10.1 envelope needs. Recommend sequencing the follow-up
+issues (consume the output downstream; region/spatial stratification) as a definition of
+done ahead of or alongside M2.
 
 **12.2 Define AutoE2E's own MRC/MRM table before HIL.** What the system does when the
 reasoning band flags low confidence, the world-model rollout diverges from the reactive

@@ -24,6 +24,7 @@ EGOMOTION_SIGNALS = 4
 ACCELERATION_INDEX = 1
 
 L2D_DATASET_NAME = "yaak-ai/L2D"
+NUPLAN_DATASET_NAME = "nuplan/nuplan-v1.1"
 NVIDIA_DATASET_NAME = "nvidia/PhysicalAI-Autonomous-Vehicles"
 KITSCENES_DATASET_NAME = "KIT-MRT/KITScenes-Multimodal"
 VALIDATION_SCOPE_FULL = "full"
@@ -93,6 +94,15 @@ L2D_TRAINING_POLICY = DatasetTrainingPolicy(
     signal_scales=(0.79, 0.12),
 )
 
+# nuPlan uses pose-space supervision for the new objective. The legacy
+# control-space weighting fields remain neutral and are not consumed by
+# simple_xy_imitation_v1.
+NUPLAN_TRAINING_POLICY = DatasetTrainingPolicy(
+    dataset_name=NUPLAN_DATASET_NAME,
+    temporal_decay=1.0,
+    signal_scales=(1.0, 1.0),
+)
+
 # NVIDIA has not yet had a corpus-specific scale audit. Preserve its prior
 # behavior explicitly instead of reaching it through an unknown-dataset fallback.
 NVIDIA_TRAINING_POLICY = DatasetTrainingPolicy(
@@ -102,7 +112,7 @@ NVIDIA_TRAINING_POLICY = DatasetTrainingPolicy(
 )
 
 # AutoE2E retains its 64-step input/output horizon and temporal weighting for
-# KITScenes. The navigation v3 repack preserves the frozen v2.2 sample
+# KITScenes. The navigation v3.5 repack preserves the frozen v2.2 sample
 # inventory, so the population statistics and exact train/dev groups remain
 # unchanged while the packed contract is versioned independently.
 KITSCENES_TRAINING_POLICY = DatasetTrainingPolicy(
@@ -118,8 +128,8 @@ KITSCENES_TRAINING_POLICY = DatasetTrainingPolicy(
     mask_latest_history_acceleration=True,
     validation_strategy="exact_group_fraction",
     validation_split_id="kitscenes_train_dev_v1",
-    validation_manifest="splits/kitscenes_train_dev_v3.json",
-    validation_manifest_schema="kitscenes_train_dev_split_v3",
+    validation_manifest="splits/kitscenes_train_dev_v4.json",
+    validation_manifest_schema="kitscenes_train_dev_split_v4",
 )
 
 # Checkpoints produced before dataset policies were recorded used L2D signal
@@ -135,6 +145,7 @@ _POLICIES = {
     policy.dataset_name: policy
     for policy in (
         L2D_TRAINING_POLICY,
+        NUPLAN_TRAINING_POLICY,
         NVIDIA_TRAINING_POLICY,
         KITSCENES_TRAINING_POLICY,
     )
@@ -142,6 +153,7 @@ _POLICIES = {
 
 _LEGACY_POLICIES = {
     L2D_DATASET_NAME: L2D_TRAINING_POLICY,
+    NUPLAN_DATASET_NAME: NUPLAN_TRAINING_POLICY,
     NVIDIA_DATASET_NAME: NVIDIA_TRAINING_POLICY,
     KITSCENES_DATASET_NAME: LEGACY_KITSCENES_TRAINING_POLICY,
 }
@@ -360,6 +372,33 @@ def validation_sample_identity(
         _manifest_count(payload, "validation_sample_count"),
         _manifest_digest(payload, "validation_sample_uid_digest"),
     )
+
+
+def configured_validation_group_uids(
+    policy: DatasetTrainingPolicy,
+) -> tuple[str, ...]:
+    """Return the immutable group allowlist before shard assignment."""
+    payload = _load_validation_manifest(policy)
+    values = payload.get("validation_group_uids")
+    if not isinstance(values, list):
+        raise ValueError(
+            "validation manifest has no validation_group_uids list"
+        )
+    normalized = tuple(str(value) for value in values)
+    if (
+        not normalized
+        or any(not value for value in normalized)
+        or len(set(normalized)) != len(normalized)
+        or tuple(sorted(normalized)) != normalized
+        or len(normalized)
+        != _manifest_count(payload, "validation_group_count")
+        or group_uid_digest(normalized)
+        != _manifest_digest(payload, "validation_group_uid_digest")
+    ):
+        raise ValueError(
+            "validation manifest group allowlist is inconsistent"
+        )
+    return normalized
 
 
 def validation_group_uids(

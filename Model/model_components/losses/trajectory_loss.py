@@ -7,15 +7,13 @@ import torch.nn as nn
 class TrajectoryImitationLoss(nn.Module):
     """Dataset-neutral imitation loss over predicted control trajectories."""
 
-    # Class-level annotations so mypy resolves these to their real types
-    # instead of nn.Module's ``__getattr__ -> Tensor | Module`` fallback
-    # (otherwise ``self.loss_fn(...)`` is flagged "Tensor not callable").
+    # Class-level annotations so mypy does not fall back to nn.Module's
+    # ``__getattr__ -> Tensor | Module``.
     loss_fn: nn.Module
     temporal_weights: torch.Tensor
     signal_scales: torch.Tensor
 
-    # Neutral defaults keep this reusable. Production training must pass the
-    # explicit dataset policy rather than inheriting values measured on L2D.
+    # Neutral defaults; training must pass dataset-specific scales explicitly.
     _DEFAULT_SIGNAL_SCALES = (1.0, 1.0)
 
     def __init__(

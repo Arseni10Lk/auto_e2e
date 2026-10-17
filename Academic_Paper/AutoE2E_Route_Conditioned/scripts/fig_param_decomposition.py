@@ -19,7 +19,7 @@ plt.rcParams.update({
 })
 
 ROOT = Path(__file__).resolve().parents[1]
-OUT = ROOT / "figures" / "fig_param_decomposition.svg"
+OUT = ROOT / "figures" / "fig_param_decomposition_v2.svg"
 
 total = 79_906_522
 total_parts = [

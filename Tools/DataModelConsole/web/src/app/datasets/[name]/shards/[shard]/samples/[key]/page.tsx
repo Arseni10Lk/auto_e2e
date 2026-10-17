@@ -87,8 +87,8 @@ function SampleDetailInner({
   // Bound forward/backward nav to the shard's FULL, ordered sample list so
   // "Next" is disabled on the true last frame (no 404 dead-end) and every
   // interior frame steps correctly. Use the shard index (all keys in order,
-  // and cached) rather than listSamples (server-capped at 50, which stranded
-  // every sample past index 49). Falls back to sibling arithmetic while loading.
+  // and cached) rather than listSamples (server-capped at 50). Falls back to
+  // sibling arithmetic while loading.
   const samples = useApi(
     () => getShardIndex(dataset, shardName, version || undefined),
     [dataset, shardName, version],

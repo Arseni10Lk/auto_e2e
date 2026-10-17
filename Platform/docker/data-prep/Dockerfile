@@ -8,13 +8,9 @@ WORKDIR /workspace
 # CPU-only torch first (lerobot-dataset omits torch, so ours stays)
 RUN pip install --no-cache-dir torch==2.4.1 torchvision==0.19.1 --index-url https://download.pytorch.org/whl/cpu
 
-# Install flytekit FIRST and PINNED, so its transitive deps (botocore/s3transfer,
-# adlfs, gcsfs, …) are resolved by ONE package's constraints. An unpinned
-# "flytekit>=1.14,<2" mixed with the rest let pip try the newest boto3/adlfs and
-# backtrack for many minutes (downloading metadata for dozens of releases in
-# descending order) before landing on a compatible set. Pinning flytekit to a
-# concrete 1.14.x makes the resolve deterministic and fast.
-RUN pip install --no-cache-dir "flytekit==1.14.9"
+# Keep task-definition semantics identical to registration and training.
+# In particular, repository tasks use labels, which requires Flytekit 1.16.
+RUN pip install --no-cache-dir "flytekit==1.16.24"
 
 # KITScenes API + the matching vendored Python 3.12 Lanelet2 wheel. Pinning the
 # SDK commit keeps the official scene split and on-disk parser contract aligned
@@ -27,6 +23,16 @@ RUN git lfs install --system \
     && cd /tmp/kitscenes \
     && pip install --no-cache-dir ".[map]" \
     && rm -rf /tmp/kitscenes
+
+# nuPlan is installed from one reviewed revision without its obsolete global
+# requirements lock. The minimal Python 3.12-compatible runtime dependencies
+# are pinned below together with the rest of the data-prep environment.
+ARG NUPLAN_DEVKIT_REVISION=e9241677997dd86bfc0bcd44817ab04fe631405b
+RUN GIT_LFS_SKIP_SMUDGE=1 git clone \
+      https://github.com/motional/nuplan-devkit.git /tmp/nuplan-devkit \
+    && git -C /tmp/nuplan-devkit checkout "${NUPLAN_DEVKIT_REVISION}" \
+    && pip install --no-cache-dir --no-deps /tmp/nuplan-devkit \
+    && rm -rf /tmp/nuplan-devkit
 
 # KITScenes requires NumPy 1.x, while lerobot-dataset 0.5.0's package metadata
 # requires NumPy 2.x even though its dataset runtime remains NumPy 1-compatible.
@@ -49,14 +55,32 @@ RUN pip install --no-cache-dir \
     "deepdiff>=7.0,<9.0" \
     "imageio[ffmpeg]>=2.34,<3.0" \
     "jsonlines>=4.0,<5.0" \
+    networkx \
+    "osmium==4.3.1" \
+    "geopandas>=0.14,<1.0" \
+    "pyogrio==0.12.1" \
+    "rasterio==1.4.3" \
+    "hydra-core>=1.3,<1.4" \
+    pyquaternion \
+    "SQLAlchemy>=1.4.54,<2.0" \
+    retry \
+    ujson \
     "packaging>=24.2,<26.0" \
     "termcolor>=2.4,<4.0" \
     timm \
     scipy \
     pyproj==3.7.2 \
+    "pytest==9.0.3" \
     "boto3==1.43.0" \
     pyarrow \
     && pip install --no-cache-dir --no-deps "lerobot-dataset==0.5.0"
+
+# nuPlan imports aioboto3 even when its local blob store is selected. Keep the
+# existing Flyte-compatible aiobotocore/botocore stack instead of resolving the
+# older versions declared by aioboto3 package metadata.
+RUN pip install --no-cache-dir --no-deps "aioboto3==15.5.0" \
+    && python -c "from nuplan.database.maps_db.gpkg_mapsdb import GPKGMapsDB" \
+    && python -c "from nuplan.planning.scenario_builder.nuplan_db.nuplan_scenario_builder import NuPlanScenarioBuilder"
 
 COPY Model/ /workspace/Model/
 COPY Platform/pipelines/ /workspace/Platform/pipelines/

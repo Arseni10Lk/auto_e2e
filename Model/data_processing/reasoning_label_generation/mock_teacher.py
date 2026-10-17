@@ -1,12 +1,11 @@
-"""Deterministic mock teacher (issue #98, R3).
+"""Deterministic mock teacher.
 
-Produces valid, reproducible :class:`ReasoningLabelRecord`s WITHOUT any model,
-network, or GPU — so CI and contributors without a cluster can exercise the
+Produces valid, reproducible :class:`ReasoningLabelRecord`s without any model,
+network, or GPU, so CI and contributors without a cluster can exercise the
 whole offline pipeline (label → validate → write → train) locally.
 
-Labels are a deterministic function of the sample_id (hashed), so the same
-sample always gets the same labels across runs — useful for tests and for a
-cheap smoke of the training path before a real teacher is wired in.
+Labels are a deterministic function of the hashed sample_id, so the same
+sample always gets the same labels across runs.
 """
 
 from __future__ import annotations

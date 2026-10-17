@@ -69,8 +69,8 @@ variable "alb_port" {
 #   next; the ALB controller creates the internal ALB and attaches this SG.
 #
 # Phase 2 (deployment_phase == "locked", with alb_arn/alb_dns): creates the VPC
-#   origin + CloudFront distribution, and SWAPS the SG ingress to admit alb_port
-#   ONLY from CloudFront's managed "CloudFront-VPCOrigins-Service-SG" (which the
+#   origin + CloudFront distribution, and swaps the SG ingress to admit alb_port
+#   only from CloudFront's managed "CloudFront-VPCOrigins-Service-SG" (which the
 #   VPC origin provisions), looked up via data source. End state: nothing but
 #   CloudFront's VPC-origin ENIs can reach the ALB.
 variable "deployment_phase" {

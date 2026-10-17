@@ -1,4 +1,4 @@
-"""Abstract, model-agnostic teacher client (issue #98, R1/R2).
+"""Abstract, model-agnostic teacher client.
 
 A teacher client turns a driving sample (clip frames + optional ego/route/map
 context) into a :class:`ReasoningLabelRecord` — five horizons of action-relevant
@@ -7,10 +7,10 @@ rule-based) shares this one interface, so the offline pipeline swaps backends
 with no code change and AutoE2E stays backend-agnostic (depends only on
 ``provider / base_url / model / prompt_version / schema_version / request_mode``).
 
-TRAIN-ONLY / OFFLINE: teachers run during preprocessing (a Flyte task, a local
-script, a batch job) and are NEVER instantiated in the model forward pass or the
-vehicle. They live under ``data_processing`` precisely so ``model_components``
-never imports them.
+Teachers are train-only: they run during preprocessing (a Flyte task, a local
+script, a batch job) and are never instantiated in the model forward pass or the
+vehicle. They live under ``data_processing`` so ``model_components`` never
+imports them.
 """
 
 from __future__ import annotations
@@ -69,7 +69,7 @@ class TeacherClient(ABC):
         request_mode: ``"per_frame"`` or ``"clip_horizons"``.
         taxonomy: label registry (defaults to :data:`DEFAULT_TAXONOMY`).
         strict: if True (default) a backend raises on endpoint/parse/schema
-            failure; if False it returns an abstained record (R9).
+            failure; if False it returns an abstained record.
     """
 
     def __init__(
@@ -105,7 +105,7 @@ class TeacherClient(ABC):
         return [self.label(r) for r in requests]
 
     def _abstain(self, request: TeacherRequest, error: str) -> ReasoningLabelRecord:
-        """Build an abstained record for *request* (R9)."""
+        """Build an abstained record for *request*."""
         return ReasoningLabelRecord.abstain(
             sample_id=request.sample_id,
             dataset_name=request.dataset_name,

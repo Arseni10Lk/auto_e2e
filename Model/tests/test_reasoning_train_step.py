@@ -1,8 +1,8 @@
-"""End-to-end reasoning training-step smoke (issue #98).
+"""End-to-end reasoning training-step smoke.
 
 The unit tests prove each part in isolation; this proves the parts actually
 connect into a training step that produces a finite combined loss which
-DECREASES under optimization — i.e. reasoning loss really flows to the head.
+decreases under optimization, i.e. reasoning loss really flows to the head.
 
 Mock backbone + mock teacher, no GPU / network / shards. Mirrors the wiring in
 the Flyte train_il task: model(mode="train") → (traj, aux) → HorizonReasoningLoss

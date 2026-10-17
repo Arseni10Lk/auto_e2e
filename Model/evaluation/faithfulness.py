@@ -1,4 +1,4 @@
-"""Reasoning-branch faithfulness check via intervention (#98).
+"""Reasoning-branch faithfulness check via intervention.
 
 Recent VLA benchmarks show a model's stated reasoning can be *decorative* rather
 than causal — high observational alignment while interventions on the reasoning
@@ -7,13 +7,11 @@ measures the causal notion directly: run the same batch with and without the
 reasoning branch's planner coupling and report how much the trajectory moves.
 
 Because the coupling is zero-initialised, the delta is exactly 0.0 at
-initialisation and only grows once training opens the gate — so this doubles as
+initialisation and only grows once training opens the gate, so this doubles as
 a regression check that enabling reasoning does not perturb the reactive
 baseline before training.
 
-Uses the current AutoE2E forward ABI (projection / geometry_type /
-image_transform), and compares against the EFFECTIVE context the planner uses:
-the intervention bypasses the head inside ``ReactiveE2E`` (where reasoning runs,
+The intervention bypasses the head inside ``ReactiveE2E`` (where reasoning runs,
 after TemporalMemory), and the World Model's rolling buffer is snapshot/restored
 so both runs see the same history.
 """
@@ -56,7 +54,7 @@ def reasoning_intervention_delta(
     Args:
         model: an ``AutoE2E`` built with ``enable_reasoning=True``.
         camera_tiles / map_input / visual_history / egomotion_history: one batch.
-        projection / geometry_type / image_transform: current geometry ABI.
+        projection / geometry_type / image_transform: forwarded to the model.
 
     Returns:
         ``{"trajectory_l2": float}`` — 0.0 while the coupling gate is untrained.
@@ -113,8 +111,7 @@ def horizon_intervention_delta(
 
     Wraps the model's reasoning head so its ``horizon_tokens`` / ``reasoning_latent``
     are perturbed before the planner consumes them, then compares the trajectory
-    against the un-perturbed run. Preserves *when* a hazard matters as a testable
-    property (#98 §9.3).
+    against the un-perturbed run, which makes *when* a hazard matters testable.
 
     Args:
         intervention: one of ``"zero_all"`` (zero every horizon token),

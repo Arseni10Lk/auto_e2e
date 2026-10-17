@@ -53,7 +53,7 @@ resource "aws_route_table_association" "public" {
   route_table_id = aws_route_table.public.id
 }
 
-# NAT Gateway (single NAT for cost; upgrade to per-AZ for HA later)
+# NAT Gateway (single NAT for cost; not per-AZ HA)
 resource "aws_eip" "nat" {
   domain = "vpc"
   tags   = { Name = "${var.name}-nat-eip" }

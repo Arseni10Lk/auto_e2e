@@ -1,4 +1,4 @@
-"""Typed schema for reasoning label artifacts (issue #98, R4/R5).
+"""Typed schema for reasoning label artifacts.
 
 Defines the offline label objects that a teacher produces and training
 consumes: a per-horizon label (:class:`ReasoningHorizonLabel`), a per-sample
@@ -10,12 +10,12 @@ These are plain dataclasses (no torch dependency at definition time) so the
 schema can be validated, serialized to JSONL/Parquet, and unit-tested without
 a GPU. Tensorization for the loss happens in :class:`ReasoningTargetBatch`.
 
-Contract (validated in :mod:`.validators`):
-    * every successful record has EXACTLY five horizons (0,1,2,3,4 s), in order;
+Contract:
+    * every successful record has exactly five horizons (0,1,2,3,4 s), in order;
     * labels are drawn only from the taxonomy (unknown_* to abstain within a
       group);
     * an abstained record carries ``abstained=True`` + ``teacher_error`` and is
-      masked out of the loss (never silently turned into all-zero labels, R9).
+      masked out of the loss, never turned into all-zero labels.
 """
 
 from __future__ import annotations
@@ -95,12 +95,12 @@ class ReasoningHorizonLabel:
 
 @dataclass
 class ReasoningLabelRecord:
-    """One sample's reasoning labels plus full artifact provenance (R4).
+    """One sample's reasoning labels plus full artifact provenance.
 
     A successful record holds exactly :data:`NUM_HORIZONS` horizons in order.
     An abstained record (endpoint/parse/schema failure under ``strict=False``)
     sets ``abstained=True`` and ``teacher_error``; its horizons are masked out
-    of the loss rather than converted to all-zero labels (R9).
+    of the loss rather than converted to all-zero labels.
     """
 
     schema_version: str
@@ -115,7 +115,7 @@ class ReasoningLabelRecord:
 
     horizons: List[ReasoningHorizonLabel]
 
-    # Extended provenance (R4) — recorded so training can filter/weight.
+    # Extended provenance, recorded so training can filter/weight.
     dataset_version: Optional[str] = None
     teacher_endpoint_type: Optional[str] = None
     labeler_version: Optional[str] = None
@@ -138,7 +138,7 @@ class ReasoningLabelRecord:
         teacher_error: str,
         timestamp: float = 0.0,
     ) -> "ReasoningLabelRecord":
-        """Build an explicitly-abstained record (R9).
+        """Build an explicitly-abstained record.
 
         Carries no horizons and marks the failure provenance, so downstream
         training masks the sample out instead of learning all-zero labels.

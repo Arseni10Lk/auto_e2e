@@ -22,12 +22,8 @@ const DEFAULT_MAX_ENTRIES = 500;
 // Frames per contiguous fetch window. Larger windows amortize more round trips
 // but delay the first draw and over-fetch on a scrub; 8 balances both.
 const WINDOW_FRAMES = 8;
-// How many windows AHEAD of the playhead to keep fetched. Measured (2026-07):
-// 3 concurrent window GETs sustain ~40fps aggregate, but the buffer starved at
-// ~2.3fps because fetches only fired on a frame change — when the buffer-gated
-// clock froze the frame, no refill was scheduled. Keeping this many windows
-// warm ahead of the playhead is the buffer-health-driven lookahead that keeps
-// MAX_INFLIGHT saturated during playback. Covers ~2s at 10Hz (24 frames).
+// How many windows ahead of the playhead to keep fetched, so MAX_INFLIGHT stays
+// saturated during playback. Covers ~2s at 10Hz (24 frames).
 const LOOKAHEAD_WINDOWS = 3;
 // Raw window buffers retained for slicing (each ~0.6-1MB). Must exceed the
 // number of windows we keep in flight+decoded at once (current + LOOKAHEAD +
@@ -35,8 +31,8 @@ const LOOKAHEAD_WINDOWS = 3;
 // decoder still needs. current(1) + LOOKAHEAD(3) + slack(2) = 6.
 const MAX_BUFFERS = 6;
 // Concurrent window GETs. These are large reads, so a handful is plenty and
-// keeps us from re-introducing the many-tiny-connections contention. Measured
-// sweet spot: aggregate throughput saturates at 3-4 and regresses beyond.
+// avoids many-tiny-connections contention; aggregate throughput saturates at
+// 3-4 and regresses beyond.
 const MAX_INFLIGHT = 3;
 
 interface WindowBuffer {

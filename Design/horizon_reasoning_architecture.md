@@ -4,12 +4,12 @@
 
 | Field | Value |
 |-------|-------|
-| Status | Proposed (supersedes the #108/#109 v1 skeleton) |
+| Status | Implemented: `Model/model_components/reasoning/`, planner coupling in `Model/model_components/trajectory_planning/reasoning_coupling.py`, loss in `Model/training/losses/horizon_reasoning_loss.py`, offline labelling in `Model/data_processing/reasoning_label_generation/`. The research track in §10 is not implemented. |
 | Authors | riita10069 |
 | Created | 2026-07-08 |
 | Related Issue | [#98 — Proposal: Reasoning band (1 Hz scenario-description / VLM student–teacher)](https://github.com/autowarefoundation/auto_e2e/issues/98) |
-| Builds on | #85/#93 (Encoded Visual History), #103 (per-horizon confidence), #107 (projection ABI), #108/#109 (reasoning v1 skeleton, teacher registry, evaluation) |
-| Supersedes | The 3-axis taxonomy (`maneuver`/`edge_case`/`weather_env`) from #108 |
+| Builds on | Encoded Visual History, per-horizon confidence, the projection ABI, and the v1 reasoning skeleton (teacher registry, evaluation harness) |
+| Supersedes | The v1 3-axis taxonomy (`maneuver`/`edge_case`/`weather_env`) |
 
 ---
 
@@ -20,20 +20,18 @@ This document specifies the **Reasoning branch** of AutoE2E: a lightweight, offl
 its behaviour over a short future horizon (now, +1s, +2s, +3s, +4s @ 1 Hz), and conditions the
 trajectory planner through a **zero-initialised gate**.
 
-The design rests on three positions the working group converged on in the #98 thread:
+The design rests on three positions the working group converged on in the related issue:
 
 1. **Reasoning ≠ language generation.** The runtime student does not emit text. It projects the
    already-computed Encoded Visual History into a *finite action-relevant semantic space* (what
    matters to ego, when, why, which response class, how confident). Natural language is kept only
    as an optional offline audit trail (`evidence`), never on the runtime path.
-   (riita, #98: *"Reasoning = predicting action-relevant meaning, causes, and future constraints
-   from perception."*)
+   Reasoning means predicting action-relevant meaning, causes, and future constraints from
+   perception.
 
 2. **The reason is the value, not the action.** The predicted trajectory already encodes the
    action (accelerate / stop / steer). What is *additive* is the reason behind it — the
    **action–reason pair** (`prepare_stop ← vru_conflict`, `stay_stopped ← red_light`).
-   (m-zain-khawaja, #98: the action description is not value-additive since the trajectory encodes
-   it; the reason is what is informative.)
 
 3. **Teacher models are train-only and model-agnostic.** All teacher inference (Cosmos3-Nano,
    Qwen, VideoLLaMA, or a mock) happens **offline**, behind an OpenAI-compatible endpoint, and is
@@ -49,13 +47,12 @@ the gate away from zero.
 
 ### Why this supersedes the v1 skeleton
 
-PR #108/#109 shipped a correct **v1 skeleton** — per-horizon multi-label heads, a per-horizon
+The **v1 skeleton** had per-horizon multi-label heads, a per-horizon
 confidence head, a zero-init FiLM gate, Asymmetric Loss kept outside the model, an offline teacher
 registry with an OpenAI-compatible endpoint, and a long-tail + faithfulness evaluation harness.
-This document keeps those good bones and replaces the two weak parts that the authors themselves
-flagged:
+This design keeps those parts and replaces the trunk and taxonomy:
 
-| v1 skeleton (#108/#109) | This design (v2) |
+| v1 skeleton | This design (v2) |
 |---|---|
 | Shared **MLP trunk** over the 896 vector | **Context tokens + 5 horizon queries + cross-attention decoder** → per-horizon `[B,5,256]` tokens |
 | **3-axis taxonomy** (`maneuver`/`edge_case`/`weather_env`) | **Compositional action-relevant ontology** (relation / hazard / cause / longitudinal / lateral / tactical / rule + optional scene/topology/actor/timing) |
@@ -63,9 +60,8 @@ flagged:
 | Teacher clients live **inside** `model_components/reasoning/teachers/` | Teacher clients move to `Model/data_processing/reasoning_label_generation/`; `model_components` stays runtime-safe (no teacher import at all) |
 | Targets are tensors returned directly by a teacher | **Versioned JSONL/Parquet artifacts** with provenance, confidence, and `abstained` records; training reads artifacts, never a live teacher |
 
-Because the project is in a **research phase**, v2 does **not** preserve backward compatibility
-with the v1 taxonomy or interfaces — the old 3-axis taxonomy and the `ReasoningBand` MLP are
-removed, not wrapped. (See `CLAUDE.md` § "開発フェーズ方針".)
+v2 does **not** preserve backward compatibility with the v1 taxonomy or interfaces — the 3-axis
+taxonomy and the `ReasoningBand` MLP are removed, not wrapped.
 
 ---
 
@@ -73,7 +69,7 @@ removed, not wrapped. (See `CLAUDE.md` § "開発フェーズ方針".)
 
 ### 2.1 What the branch is for
 
-From the 24/06 architecture and the #98 objective: **help the policy handle edge cases**, and let
+The objective is to **help the policy handle edge cases**, and let
 a human introspect *what the model is reasoning about*. Average open-loop trajectory metrics are
 dominated by ego status (BEV-Planner, [2312.03031](https://arxiv.org/abs/2312.03031)), so a branch
 that improves long-tail behaviour must be measured on long-tail slices and by *intermediate concept
@@ -89,13 +85,11 @@ this way. This design therefore:
 - keeps a **front-only vs multi-camera reasoning** ablation as required follow-up,
 - does **not** claim full long-tail coverage from front-only reasoning.
 
-(riita, #98 point 4.)
-
 ### 2.3 Why not a generic frozen VLM at runtime
 
 Zero-shot generic VLMs (Qwen3, Gemini, Moondream2) are unreliable on foundational ODD concepts such
-as *intersection* and are expensive (~70 s/frame through the plain HF path, gcordova's datapoint;
-Moondream2 zero-shot weak on road scenes, Zain's datapoint). The deployable path is therefore a
+as *intersection* and are expensive (~70 s/frame through the plain HF path; Moondream2 zero-shot
+is weak on road scenes). The deployable path is therefore a
 **small trained student head over the 896 vector**; generic VLMs are strictly offline teachers or
 baselines. Structured labels are ~+20% decision accuracy and >10× faster than free text
 ([2506.05442](https://arxiv.org/pdf/2506.05442)); train-only VLM supervision is the recipe that
@@ -155,7 +149,7 @@ never imports a teacher; the training loop reads Parquet, never calls an endpoin
 ### 3.2 Where it plugs into the existing model
 
 The existing pipeline is `AutoE2E → ReactiveE2E`. Inside `ReactiveE2E.forward` the relevant order
-today is:
+without reasoning is:
 
 ```
 Backbone → FeatureFusion(BEV, projection ABI) → MapEncoder → MapBEVFusion
@@ -167,15 +161,13 @@ The reasoning branch is inserted **after `TemporalMemory`**, because `ego_ctx` i
 `ego_context [B,256]` the head needs and `visual_ctx` is the effective visual history the planner
 sees (the World Model, when on, replaces the caller's raw `visual_history` with the WAM-aggregated
 one before this point). The head consumes `(visual_ctx, ego_ctx)`, produces `reasoning_latent` /
-`horizon_tokens`, and the planner consumes them behind the zero-init gate. This is the "integration
-after context creation" the handoff prefers, and it makes horizon-token cross-attention natural (the
-planner's action tokens attend to the 5 horizon tokens directly).
+`horizon_tokens`, and the planner consumes them behind the zero-init gate. Integrating after context
+creation makes horizon-token cross-attention natural (the planner's action tokens attend to the 5
+horizon tokens directly).
 
-> Implementation note: today the branch is wired at the `AutoE2E` level (it modulates
-> `visual_history` before `ReactiveE2E`). v2 moves the integration point **into `ReactiveE2E`**,
-> after `TemporalMemory`, so the head sees `ego_ctx` and the planner coupling is a first-class
-> planner argument rather than a pre-`ReactiveE2E` history rewrite. This is the one structural change
-> to the model wiring.
+> Implementation note: the integration point is **inside `ReactiveE2E`**, after
+> `TemporalMemory`, so the head sees `ego_ctx` and the planner coupling is a first-class planner
+> argument rather than a pre-`ReactiveE2E` history rewrite.
 
 ---
 
@@ -184,7 +176,7 @@ planner's action tokens attend to the 5 horizon tokens directly).
 ### 4.1 Principle
 
 The label space is **not** a flat scene-fact enum. It is a set of independent axes ("groups"),
-each of which answers a distinct question. Following the #98 convergence, the *action-facing* axes
+each of which answers a distinct question. The *action-facing* axes
 (response / hazard / relation / cause) are the primary contract; scene/topology/actor axes are
 supporting context with lower loss weight.
 
@@ -269,7 +261,7 @@ taxonomy without touching v1 indices. v1 must not block on them.
 
 `slow_down` alone is ambiguous — it can be caused by a lead vehicle, a red light, a route turn, an
 occlusion, or a comfort policy. Splitting longitudinal / lateral / tactical / rule makes the
-supervision precise and directly useful to the planner. (riita, #98 §5.4.)
+supervision precise and directly useful to the planner.
 
 ---
 
@@ -359,7 +351,7 @@ student_reasoning_embedding = LayerNorm(Linear(256, D_teacher))(horizon_tokens) 
 ```
 `D_teacher ∈ {512, 768}`. Disabled by default. When offline preprocessing produced a
 `teacher_reasoning_embedding`, this head is aligned to it (§7.5). It captures soft semantics the
-discrete heads drop. Per intisar's #98 question, it may **optionally** be kept live at inference as a
+discrete heads drop. It may **optionally** be kept live at inference as a
 **read-only** signal for a student↔cached-teacher cosine drift / OOD check — but it is never required
 by the planner, and feeding it to the planner is an ablation, not the default.
 
@@ -397,7 +389,7 @@ The planner requires only `reasoning_latent` (and, in `horizon_cross_attention` 
 
 All coupling is behind a **zero-initialised scalar `alpha` (or a zero-init projection)**, so at
 initialisation the trajectory is byte-identical to the reasoning-off baseline up to numerical
-tolerance (R7). This mirrors the repo's existing `ResidualMapFusion` α=0 pattern and #108's
+tolerance (R7). This mirrors the repo's existing `ResidualMapFusion` α=0 pattern and the v1
 `ZeroInitGate`.
 
 ### 6.1 `none`
@@ -438,7 +430,7 @@ needs (§9).
 ## 7. Loss Design
 
 File: `Model/training/losses/horizon_reasoning_loss.py`. Computed in the training loop, **outside**
-the model forward (same policy as the JEPA loss, #85/#13).
+the model forward (same policy as the JEPA loss).
 
 ### 7.1 Total loss
 ```
@@ -535,9 +527,7 @@ Model/data_processing/reasoning_label_generation/
     mock_teacher.py     # deterministic, offline (was teachers/deterministic.py)
     cached_teacher.py   # read labels from a prior artifact
     prompt_builder.py   # per_frame + clip_horizons prompts over the taxonomy
-    validators.py       # 5-horizon / schema / taxonomy checks
     parquet_writer.py   # JSONL (debug) + Parquet (training)
-    flyte_tasks.py      # local-runnable Flyte Processing tasks
 ```
 `model_components/` imports **none** of this. The taxonomy
 (`model_components/reasoning/reasoning_taxonomy.py`) is the shared contract both sides import; it has
@@ -583,8 +573,7 @@ runtime dependency (OpenMDW-1.1 permits use of outputs; the Apache-2.0 artifact 
 JSONL (debug) + Parquet (training). Each record carries `dataset_name`, `dataset_version`,
 `sample_id`, `timestamp`, `schema_version`, `teacher_provider`, `teacher_model`,
 `teacher_endpoint_type`, `prompt_version`, `request_mode`, `labeler_version`, `provenance`,
-`created_at`, `abstained`, `teacher_error`, and exactly **5 horizons** in order. Validator fails on
-missing/duplicated/unordered horizons or unknown labels.
+`created_at`, `abstained`, `teacher_error`, and exactly **5 horizons** in order.
 
 Layout:
 ```
@@ -603,8 +592,8 @@ target). Two-teacher agreement is +47–55% F1 over the best single
 
 ## 9. Evaluation
 
-Reuses and extends the #109 harness (`Model/evaluation/`), which already uses the current
-projection/geometry ABI (not the old `camera_params`).
+Reuses and extends the evaluation harness in `Model/evaluation/`, which uses the
+projection/geometry ABI.
 
 ### 9.1 Ablations
 `baseline_no_reasoning` / `reasoning_pooled_latent` / `reasoning_horizon_cross_attention`. Report
@@ -625,33 +614,33 @@ and reasoning-disabled, plus targeted interventions: zero all `horizon_tokens`, 
 **Critical:** the intervention must compare against the **effective** visual/ego context the planner
 actually used (WAM-aggregated when the World Model is on), captured via a forward hook — not the raw
 caller-provided history. The buffer must be snapshot/restored so the coupled and intervened runs see
-the same history (else an untrained gate shows a spurious non-zero delta). (#109's `faithfulness.py`
-already does this correctly and is carried forward.)
+the same history (else an untrained gate shows a spurious non-zero delta). (`Model/evaluation/faithfulness.py`
+does this.)
 
 ### 9.4 Intermediate concept accuracy
 Average trajectory metrics can hide whether reasoning contributes. Also evaluate reasoning
 *correctness*: intersection / crosswalk / object-in-path detection, VRU-risk, occlusion-risk,
 traffic-rule context, per-horizon risk consistency. If the branch cannot reliably identify
-foundational concepts, a trajectory improvement is suspect. (riita, #98 point 7.)
+foundational concepts, a trajectory improvement is suspect.
 
-Optionally: student↔cached-teacher embedding cosine as a drift / OOD signal (intisar's read-only use).
+Optionally: student↔cached-teacher embedding cosine as a drift / OOD signal (read-only use).
 
 ### 9.5 Speed benchmark
 `speed_benchmark` gets a reasoning column measuring the 1 Hz cost across
 `none / pooled_latent / horizon_cross_attention`. It must pass `ReasoningHead` only supported kwargs
-(no `backbone` kwarg — the v1 review bug); `reasoning` may remain a result label.
+(no `backbone` kwarg); `reasoning` may remain a result label.
 
 ---
 
 ## 10. Research Track: Counterfactual `cause` Labels (proposal, not v1)
 
 `cause` is the most planner-relevant and hardest-to-label head. Correlational labels (VLM captions,
-trajectory logs) inherit imitation learning's causal-confusion failure mode. gcordova's proposal
-(#98), building on riita's `counterfactual_gt` provenance slot: reuse the JEPA World Model (#85) and
+trajectory logs) inherit imitation learning's causal-confusion failure mode. The proposal builds
+on the `counterfactual_gt` provenance slot: reuse the JEPA World Model and
 the intervention operator, offline and per sample —
 
 1. take the context tokens the head already ingests (including object tokens from a detector — where
-   Zain's RF-DETR idea fits as a visual-grounding context token);
+   an RF-DETR detector fits as a visual-grounding context token);
 2. drop one candidate factor's token (e.g. the pedestrian) and re-run the planner;
 3. keep the factor in `cause` **only if the plan changes beyond a threshold**.
 
@@ -659,8 +648,8 @@ A cyclist safely in the next lane → excluded; a pedestrian entering the path �
 Output provenance = `counterfactual_gt`, letting §7 raise `cause_weight` only where the factor is
 interventionally grounded. Bounded by World-Model fidelity and factor separability; validate against
 object-aware pixel counterfactuals (OCTET, CVPR'23) on a small set. Deriving `cause` supervision by
-intervention in a learned world model (vs Alpamayo-R1 CoC / OmniDrive VLM pseudo-labels) is
-genuinely SOTA-plus. Kept disabled and clearly research-only.
+intervention in a learned world model differs from Alpamayo-R1 CoC / OmniDrive VLM
+pseudo-labels. Kept disabled and clearly research-only.
 
 ---
 
@@ -689,13 +678,12 @@ genuinely SOTA-plus. Kept disabled and clearly research-only.
 
 ## 12. Implementation Plan
 
-Single feature branch (no PR split — research phase). Order: schema/taxonomy → head → loss →
-planner coupling → AutoE2E/ReactiveE2E integration → evaluation → teacher pipeline. Small,
-frequently-committed steps (per `CLAUDE.md`). Tests are CPU-only and run on EC2 before push.
+Order: schema/taxonomy → head → loss → planner coupling → AutoE2E/ReactiveE2E integration →
+evaluation → teacher pipeline. Tests are CPU-only.
 
 | Phase | Deliverable | Key files |
 |-------|-------------|-----------|
-| 1 | Compositional taxonomy + label schema + validators | `reasoning/reasoning_taxonomy.py`, `data_processing/reasoning_label_generation/{schema,validators}.py` |
+| 1 | Compositional taxonomy + label schema | `reasoning/reasoning_taxonomy.py`, `data_processing/reasoning_label_generation/schema.py` |
 | 2 | `HorizonReasoningHead` + output dataclass | `reasoning/horizon_reasoning_head.py`, `reasoning/types.py` |
 | 3 | `HorizonReasoningLoss` (structured/confidence/temporal/alignment, source-weighted) | `training/losses/horizon_reasoning_loss.py` |
 | 4 | Planner coupling (3 modes, zero-init) for Bezier + Flow-matching | `trajectory_planning/{base,bezier_planner,flow_matching_planner}.py` |
@@ -703,14 +691,14 @@ frequently-committed steps (per `CLAUDE.md`). Tests are CPU-only and run on EC2 
 | 6 | Teacher pipeline moved to data_processing; OpenAI-compatible + mock + cached + Flyte | `data_processing/reasoning_label_generation/*` |
 | 7 | Evaluation: ablations, long-tail, interventions, concept accuracy, speed column | `evaluation/*`, `speed_benchmark/*` |
 
-Removed (research phase, no compat shim): the 3-axis `scenario_taxonomy.py`, the MLP `ReasoningBand`,
+Removed (no compat shim): the 3-axis `scenario_taxonomy.py`, the MLP `ReasoningBand`,
 and `teachers/` under `model_components`.
 
 ---
 
 ## 13. References
 
-Grounding for each decision is in the #98 thread. Key papers:
+Discussion for each decision is in the related issue. Key papers:
 
 - BEV-Planner / "Is Ego Status All You Need?" — [2312.03031](https://arxiv.org/abs/2312.03031)
 - VLM-AD (train-only VLM supervision, −38.7/−57.4% collision) — [2412.14446](https://arxiv.org/abs/2412.14446)

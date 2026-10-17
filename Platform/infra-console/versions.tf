@@ -8,11 +8,10 @@ terraform {
     }
   }
 
-  # ISOLATED state — a SEPARATE key from the main Platform root
-  # (infra/terraform.tfstate). This root only ever manages console-dedicated
-  # resources (ALB SG, CloudFront), so `terraform apply` here can never plan a
-  # change to existing Platform infra (EKS/RDS/Flyte/MLflow/VPC). Same bucket +
-  # lock table as Platform for consistency.
+  # Separate state key from the main Platform root (infra/terraform.tfstate).
+  # This root only manages console-dedicated resources (ALB SG, CloudFront), so
+  # `terraform apply` here cannot plan a change to existing Platform infra.
+  # Same bucket and lock table as Platform.
   backend "s3" {
     bucket         = "auto-e2e-platform-tfstate"
     key            = "infra-console/terraform.tfstate"

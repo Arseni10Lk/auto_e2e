@@ -1,4 +1,4 @@
-"""Typed output of the horizon-aware reasoning head (issue #98).
+"""Typed output of the horizon-aware reasoning head.
 
 Kept in its own module (no nn import beyond torch tensors) so the planner and
 the training loop can depend on the output contract without importing the head

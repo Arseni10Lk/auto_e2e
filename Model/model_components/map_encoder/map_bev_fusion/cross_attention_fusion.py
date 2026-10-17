@@ -1,7 +1,4 @@
-"""
-Cross-attention map BEV fusion. Fuses image BEV features with map BEV features using spatial cross-attention.
-
-"""
+"""Cross-attention map BEV fusion of image and map BEV features."""
 
 import torch
 import torch.nn as nn
@@ -61,11 +58,9 @@ class MapCrossAttentionFusion(nn.Module):
         """
         B, C, H, W = image_bev.shape
 
-        # Dense cross-attention is O((H*W)^2). At the production BEV grid
-        # (450x300 = 135k tokens) the score matrix is ~1e11 elems → instant OOM.
-        # This fusion mode is only viable at small grids (tests use 8x8); guard
-        # loudly rather than let it OOM mid-run. Use map_fusion_mode="residual"
-        # (the default) at production resolution.
+        # Dense cross-attention is O((H*W)^2): at a 450x300 BEV grid the score
+        # matrix is ~1.8e10 elements, so this mode only fits small grids. Fail
+        # fast instead of running out of memory mid-run.
         n_tokens = H * W
         if n_tokens > 4096:
             raise ValueError(
@@ -75,7 +70,6 @@ class MapCrossAttentionFusion(nn.Module):
                 f"resolution, or downsample the grid before this fusion."
             )
 
-        # Flatten spatial dims: (B, H*W, C)
         q = image_bev.permute(0, 2, 3, 1).reshape(B, H * W, C)
         kv = map_bev.permute(0, 2, 3, 1).reshape(B, H * W, C)
 
@@ -86,9 +80,7 @@ class MapCrossAttentionFusion(nn.Module):
                                       need_weights=False)
         q = q + attn_out
 
-        # FFN with residual
         q = q + self.ffn(self.norm_ffn(q))
 
-        # Reshape back to spatial: (B, C, H, W)
         return q.reshape(B, H, W, C).permute(0, 3, 1, 2).contiguous()
     

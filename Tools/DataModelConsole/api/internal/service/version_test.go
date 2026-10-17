@@ -148,8 +148,7 @@ func TestNewestSelection(t *testing.T) {
 
 // TestSortVersionsNewestFirst pins the ordering used by ListDatasetVersions:
 // numeric-per-component, newest first (so v10 precedes v9 and v2.0 precedes
-// v1.10). This is the same comparator the endpoint returns to the UI, which
-// defaults to versions[0].
+// v1.10). The UI defaults to versions[0].
 func TestSortVersionsNewestFirst(t *testing.T) {
 	got := []string{"v1.0", "v10", "v2.0", "v1.10", "v9", "v1.2"}
 	sortVersionsNewestFirst(got)
@@ -219,8 +218,8 @@ func TestCanonicalVersionsRequirePublicationManifest(t *testing.T) {
 
 // TestShardManifestUnmarshal pins the manifest decode ListDatasetVersions
 // depends on: the pipeline-written shards/manifest.json shape must map onto
-// DatasetVersion's composition fields, and a manifest missing a field (the
-// historical minimal form) must decode its zero value rather than erroring.
+// DatasetVersion's composition fields, and a manifest missing a field must
+// decode its zero value rather than erroring.
 func TestShardManifestUnmarshal(t *testing.T) {
 	full := `{"total_samples": 436, "shards": 1, "hz": 10, "image_size": 256,
 		          "dataset": "yaak-ai/L2D", "episodes": 5, "num_views": 6,

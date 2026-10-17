@@ -5,17 +5,9 @@ import (
 	"strings"
 )
 
-// This file normalizes the verbose, nested MLflow REST and Flyte Admin JSON
-// shapes into the FLAT shapes the console frontend consumes. The proxy used to
-// relay the raw upstream bodies, but the frontend types (MLflowExperiment /
-// MLflowRun / MLflowRegisteredModel / FlyteExecution) are flat, so a raw
-// pass-through crashed the UI on real data. Normalizing server-side keeps the
-// contract in one place and lets us unit-test it against representative
-// payloads (the in-cluster services are not reachable from a dev laptop).
-
-// ---------------------------------------------------------------------------
-// MLflow
-// ---------------------------------------------------------------------------
+// This file normalizes the nested MLflow REST and Flyte Admin JSON shapes into
+// the flat shapes the console frontend consumes, so the contract lives in one
+// place and can be unit-tested against representative payloads.
 
 // TokenPage is the normalized pagination envelope used for both MLflow and
 // Flyte list endpoints.
@@ -317,10 +309,6 @@ func NormalizeMLflowModelVersionsPage(
 	}, nil
 }
 
-// ---------------------------------------------------------------------------
-// Flyte
-// ---------------------------------------------------------------------------
-
 // FlyteExecution is the flat execution shape the frontend expects.
 type FlyteExecution struct {
 	ExecutionID  string `json:"execution_id"`
@@ -364,8 +352,8 @@ func NormalizeFlyteExecutionsPage(
 	}, nil
 }
 
-// NormalizeFlyteExecution decodes a SINGLE Flyte Admin execution (the get-by-id
-// endpoint returns the unwrapped Execution message {id,closure,spec}, NOT the
+// NormalizeFlyteExecution decodes a single Flyte Admin execution (the get-by-id
+// endpoint returns the unwrapped Execution message {id,closure,spec}, not the
 // {"executions":[...]} envelope) into the flat FlyteExecution shape.
 func NormalizeFlyteExecution(body []byte) (FlyteExecution, error) {
 	var raw rawFlyteExecution

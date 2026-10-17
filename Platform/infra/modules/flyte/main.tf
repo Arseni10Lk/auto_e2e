@@ -5,7 +5,7 @@ variable "datasets_bucket" {
   type        = string
 }
 variable "checkpoints_bucket" {
-  description = "Versioned bucket for immutable training checkpoints."
+  description = "Versioned bucket for Ray training and immutable published checkpoints."
   type        = string
   default     = ""
 }
@@ -101,6 +101,15 @@ resource "aws_iam_role_policy" "flyte_user_s3" {
             "arn:aws:s3:::${var.datasets_bucket}",
           ]
         },
+        # S3 multipart copy authorizes the source through the Flyte task role.
+        # Keep this read-only grant scoped to the official nuPlan v1.1 prefix.
+        {
+          Effect = "Allow"
+          Action = ["s3:GetObject"]
+          Resource = [
+            "arn:aws:s3:::motional-nuplan/public/nuplan-v1.1/*",
+          ]
+        },
         {
           Effect = "Allow"
           Action = ["dynamodb:GetItem", "dynamodb:PutItem"]
@@ -115,6 +124,15 @@ resource "aws_iam_role_policy" "flyte_user_s3" {
           Action = ["s3:GetObject", "s3:PutObject"]
           Resource = [
             "arn:aws:s3:::${var.checkpoints_bucket}/*",
+          ]
+        },
+        # Ray Train prunes superseded step checkpoints through the task role.
+        # Keep deletion scoped away from immutable published checkpoints.
+        {
+          Effect = "Allow"
+          Action = ["s3:DeleteObject"]
+          Resource = [
+            "arn:aws:s3:::${var.checkpoints_bucket}/ray-train/*",
           ]
         },
         {
@@ -220,7 +238,7 @@ resource "helm_release" "flyte" {
 # Post-apply: patch Flyte control-plane storage configmaps to use accesskey auth.
 # The flyte-core chart only renders `iam` auth for type=s3; the stow/minio-go S3
 # client (AWS SDK v1) does not support IRSA/Pod Identity, so static keys are required.
-# This runs on every apply and whenever the keys change (idempotent kubectl patch).
+# Re-runs whenever the keys, bucket, or region change (idempotent kubectl replace).
 resource "null_resource" "flyte_storage_accesskey_patch" {
   triggers = {
     access_key = var.flyte_s3_access_key

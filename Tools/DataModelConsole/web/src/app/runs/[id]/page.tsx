@@ -17,7 +17,7 @@ import { useApi } from "@/hooks/use-api";
 import { getExecution } from "@/lib/api";
 import { formatDuration, formatTimestamp } from "@/lib/format";
 
-// Phase 1: node DAG rendered as a simplified ordered list.
+// Node DAG rendered as a simplified ordered list.
 export default function ExecutionDetailPage({
   params,
 }: {

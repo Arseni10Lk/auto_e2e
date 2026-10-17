@@ -103,35 +103,4 @@ ax.set_xlim(-12, 30); ax.grid(axis="x", alpha=0.3, lw=0.5)
 ax.set_title("Checkpoint-internal validation, KITScenes frozen split (n = 3,820; route metrics on 2,911 route-valid samples)", fontsize=8.8)
 fig.tight_layout(); fig.savefig(OUT + "fig_tradeoff_ep5_ep7.svg", bbox_inches="tight"); plt.close(fig)
 
-# ---- parameter budget ----
-parts = [
-    ("T8 temporal fusion", 30_809_856, "frozen"),
-    ("ResNet-50 backbone", 23_508_032, "frozen"),
-    ("BEV queries (300x200x256)", 15_360_000, "frozen"),
-    ("Encoder layers x6", 4_940_928, "frozen"),
-    ("FPN (4 levels)", 3_278_592, "frozen"),
-    ("Front cross-attention copy", 328_960, "frozen"),
-    ("Pos./level/camera embeddings", 66_560, "frozen"),
-    ("BEV segmentation head", 165_000, "frozen"),
-    ("GRU control planner", 835_380, "trainable"),
-    ("Deformable navigation fusion", 350_288, "trainable"),
-    ("Map encoder E_map", 167_200, "trainable"),
-    ("Route encoder E_route", 77_984, "trainable"),
-    ("Route reconstruction head", 17_218, "trainable"),
-    ("Route gate + front gate", 512, "trainable"),
-]
-fig, ax = plt.subplots(figsize=(6.9, 3.0))
-names = [p[0] for p in parts]; vals = [p[1] for p in parts]; kinds = [p[2] for p in parts]
-y = np.arange(len(parts))[::-1]
-ax.barh(y, vals, color=["#6E7B8E" if k == "frozen" else "#2E8B57" for k in kinds], height=0.65)
-ax.set_xscale("log"); ax.set_xlim(2e2, 2e8)
-for yi, v in zip(y, vals):
-    ax.text(v * 1.15, yi, f"{v:,}", va="center", fontsize=7)
-ax.set_yticks(y); ax.set_yticklabels(names, fontsize=8)
-ax.set_xlabel("parameters (log scale)")
-ax.set_title("Parameter budget of the evaluated configuration: 79,906,522 total; 1,448,582 trainable in trajectory stages", fontsize=8.8)
-ax.legend(handles=[Patch(facecolor="#6E7B8E", label="frozen in trajectory stages (78.46 M)"),
-                   Patch(facecolor="#2E8B57", label="trainable (1.45 M)")], frameon=False, loc="lower right")
-ax.grid(axis="x", alpha=0.3, lw=0.5)
-fig.tight_layout(); fig.savefig(OUT + "fig_param_budget.svg", bbox_inches="tight"); plt.close(fig)
 print("results figures written")

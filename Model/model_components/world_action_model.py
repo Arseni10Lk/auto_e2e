@@ -1,27 +1,21 @@
-"""World Action Model — slow World-Model branch (~1 Hz). Agreed in WG 2026-06-24.
+"""World Action Model: slow (~1 Hz) world-model branch.
 
-Encodes the recent multi-camera history into a rolling **visual-history** vector
-and predicts the **future** visual features (JEPA, self-supervised). Decoded from
-Zain's answers to the 5 interface questions (24/06 transcript + miro):
+Encodes the recent multi-camera history into a rolling visual-history vector and
+predicts future backbone feature maps (JEPA, self-supervised):
 
-1. **Backbone:** one SHARED image backbone; the JEPA target is a **FROZEN copy**
-   of it (not EMA) — `JepaTargetEncoder(mode="frozen")`.
-2. **Horizons:** `N_past = N_future`, default **4**, sampled at **1 Hz**.
-3. **Feature level:** the history uses a per-frame **224** embedding; the JEPA
-   **future prediction reconstructs the backbone feature maps** ``[B, C, 8, 8]``
-   (per @m-zain-khawaja's #85 review, 30/06) — not a pooled vector.
-4. **Visual history:** a rolling **FIFO buffer** of the last `history_len`
-   embeddings → `history_len * frame_embed_dim = 4 * 224 = 896` (= the existing
-   `visual_history_dim`), fed to the reactive planner.
-5. **Training:** in `train_il` with equal loss weight; **L1** in feature space.
-   Future frames come from the 1 Hz stream of the dataloader.
+1. Backbone: one shared image backbone; the JEPA target is a frozen copy of it
+   (``JepaTargetEncoder(mode="frozen")``).
+2. Horizons: ``N_past = N_future``, default 4, sampled at 1 Hz.
+3. Feature level: the history uses a per-frame 224-dim embedding; the JEPA
+   future prediction reconstructs backbone feature maps ``[B, C, 8, 8]``.
+4. Visual history: a FIFO of the last ``history_len`` embeddings,
+   ``history_len * frame_embed_dim = 4 * 224 = 896`` (``visual_history_dim``),
+   fed to the reactive planner.
+5. Training: L1 in feature space, equal loss weight; future frames come from
+   the 1 Hz stream of the dataloader.
 
-The per-tick ``forward`` returns ``(visual_embedding, future_state_pred)``: the
-embedding is pushed to the rolling history (→ reactive planner), and
-``future_state_pred`` (the predicted future feature maps, training only) feeds the
-JEPA loss, which is computed separately via :meth:`jepa_loss` in the training
-loop. Reuses the merged building blocks (JepaTargetEncoder,
-FeatureReconstructionLoss).
+The per-tick ``forward`` returns ``(visual_embedding, future_state_pred)``; the
+JEPA loss is computed separately via :meth:`jepa_loss` in the training loop.
 """
 
 import logging
@@ -48,10 +42,9 @@ class ViewAttentionPool(nn.Module):
     def __init__(self, embed_dim: int = 768, num_views: int = 7, num_heads: int = 4,
                  max_views: int = 16):
         super().__init__()
-        # Learn a DISTINCT positional embedding for up to max_views cameras, so a
-        # merged run mixing rigs (L2D 6, NVIDIA 7, ...) never reuses one camera's
-        # code for another. max_views is an upper bound covering any realistic
-        # rig; runtime V just slices the first V (V > max_views is rejected).
+        # Distinct positional embedding per camera up to max_views, so mixed rigs
+        # (L2D 6, NVIDIA 7, ...) never share one camera's code for another.
+        # Runtime V slices the first V; V > max_views is rejected.
         self.max_views = max(max_views, num_views)
         self.view_embed = nn.Parameter(torch.randn(1, self.max_views, embed_dim) * 0.02)
         self.query = nn.Parameter(torch.randn(1, 1, embed_dim) * 0.02)
@@ -59,15 +52,13 @@ class ViewAttentionPool(nn.Module):
         self.norm = nn.LayerNorm(embed_dim)
 
     def forward(self, view_tokens: torch.Tensor) -> torch.Tensor:
-        # view_tokens: [B, V, C]   (C = embed_dim = 768)
+        # view_tokens: [B, V, C], C = embed_dim
         B, V, C = view_tokens.shape
         if V > self.max_views:
             raise ValueError(
                 f"ViewAttentionPool got V={V} cameras but was built for at most "
                 f"max_views={self.max_views}; increase max_views."
             )
-        # Slice the first V distinct positional embeddings — never wrap around
-        # (reusing camera 0's code for camera V-1 would corrupt view identity).
         v_embed = self.view_embed[:, :V]
         tok = view_tokens + v_embed
         q = self.query.expand(B, -1, -1)
@@ -81,16 +72,11 @@ class FrameEncoder(nn.Module):
     backbone -> last feature map -> global average pool -> linear projection.
 
     ``detach_backbone`` (default True) stop-gradients the backbone feature map
-    before the WM's own projection. The World Model SHARES the trajectory
-    branch's backbone (AutoE2E passes the same instance); without this, the JEPA
-    future-reconstruction loss (weight 1.0) backprops through this encoder into
-    that shared backbone and reshapes it toward "predict future features" instead
-    of "features the planner regresses a trajectory from" — a representation
-    conflict that floors the trajectory loss at ~0.845 (vs 0.36 imitation-only),
-    invariant to batch size. Detaching here confines JEPA's gradient to the WM's
-    own proj / aggregator / future_predictor, so the shared backbone is governed
-    solely by the imitation loss. The JEPA TARGET is already a frozen deepcopy
-    (JepaTargetEncoder), so JEPA still has a stable learning signal.
+    before the projection. The backbone is shared with the trajectory branch;
+    without the detach, the JEPA loss pulls it toward future-feature prediction
+    and away from what the planner needs. Detaching confines JEPA's gradient to
+    this module's projection, aggregator and future predictor; the JEPA target is
+    a frozen copy, so the signal stays stable.
     """
 
     def __init__(self, backbone: nn.Module, feature_channels: int = 768,
@@ -168,11 +154,9 @@ class RollingHistoryBuffer:
 
 
 class HistoryAttentionPool(nn.Module):
-    """Opt-in learnable temporal aggregator for the World Model history — the
-    "temporal attention-pool" alternative to the equal-weight concat-FIFO.
+    """Opt-in learnable temporal aggregator, alternative to the concat FIFO.
 
-    Adapted from the BEV-queue temporal self-attention (T3 / #87): a single
-    learnable query attends over the ``history_len`` frame embeddings plus
+    A single learnable query attends over the ``history_len`` frame embeddings plus
     learned temporal positional embeddings (recency-aware), so frames are
     weighted by relevance instead of equally. The pooled per-frame vector is
     projected back to ``history_len * frame_embed_dim`` so it is a drop-in for
@@ -207,8 +191,8 @@ class BackboneFeatureMap(nn.Module):
     """One multi-camera frame -> the backbone's last **feature map** ``[B, C, hw, hw]``.
 
     Unlike :class:`FrameEncoder` (which pools to a vector for the history), this
-    keeps the spatial feature map — it is the JEPA target the future predictor
-    reconstructs (per Zain's #85 review: reconstruct ``[B, backbone_channels, 8, 8]``).
+    keeps the spatial feature map, which is the JEPA target the future predictor
+    reconstructs.
     Multi-view frames are mean-pooled over views; the map is adaptive-avg-pooled
     to ``hw x hw`` so the target grid is fixed regardless of the backbone's native
     resolution.
@@ -282,8 +266,6 @@ class WorldActionModel(nn.Module):
             raise ValueError(
                 f"Unknown history_aggregator {history_aggregator!r}. "
                 "Available: 'concat' (default), 'attention'.")
-        # num_future_steps defaults to history_len (documented). A hardcoded 4
-        # would IndexError in jepa_loss when the packed future window differs.
         if num_future_steps is None:
             num_future_steps = history_len
         self.history_len = history_len
@@ -293,25 +275,18 @@ class WorldActionModel(nn.Module):
         self.feature_hw = feature_hw
         self.visual_history_dim = history_len * frame_embed_dim  # 4*224 = 896
 
-        # History aggregator: how the FIFO of frame embeddings becomes the
-        # visual_history fed to the planner. "concat" = equal-weight FIFO
-        # (default, byte-identical to before); "attention" = the opt-in
-        # learnable temporal attention-pool (recency-aware), reused from T3.
+        # "concat": equal-weight FIFO; "attention": learnable temporal pool.
         self.history_pool = (
             HistoryAttentionPool(frame_embed_dim, history_len)
             if history_aggregator == "attention" else None)
 
-        # Online per-frame encoder (shared backbone, trainable) -> 224 history embedding.
         self.encoder = FrameEncoder(
             backbone, feature_channels, frame_embed_dim,
             view_aggregator=view_aggregator, num_views=num_views
         )
-        # JEPA target: a FROZEN, stop-gradient copy of the backbone FEATURE MAP
-        # extractor (#1). Per Zain's #85 review (30/06) the JEPA reconstructs the
-        # future backbone feature maps [B, C, hw, hw], not a pooled vector.
+        # JEPA target: frozen, stop-gradient copy of the feature-map extractor.
         self.target = JepaTargetEncoder(
             BackboneFeatureMap(backbone, feature_hw), mode="frozen")
-        # Future feature-map predictor: visual_history -> N x [B, C, hw, hw].
         self.future_predictor = FutureFeatureMapPredictor(
             self.visual_history_dim, feature_channels, feature_hw, num_future_steps)
         self.recon_loss = FeatureReconstructionLoss(
@@ -341,7 +316,7 @@ class WorldActionModel(nn.Module):
 
     def forward(self, frame: torch.Tensor,
                 visual_history: torch.Tensor | None = None):
-        """Per-tick (online) call, matching the AutoE2E wiring agreed 24/06:
+        """Per-tick (online) call::
 
             visual_embedding, future_state_pred = WorldActionModel(frame, visual_history)
 
@@ -359,9 +334,7 @@ class WorldActionModel(nn.Module):
               the Encoded Visual History fed to the reactive planner;
             * ``future_state_pred`` is a list of ``num_future_steps`` future
               backbone **feature maps** ``[B, feature_channels, hw, hw]`` (only
-              needed in training; ``None`` if no ``visual_history`` is given). The
-              JEPA loss is computed separately via :meth:`jepa_loss` (kept out of
-              the model, in the training loop).
+              needed in training; ``None`` if no ``visual_history`` is given).
         """
         visual_embedding = self.encoder(frame)
         future_state_pred = (self.predict_future(visual_history)

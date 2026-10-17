@@ -51,7 +51,7 @@ const L2D_RIG: Record<string, RigCam> = {
   cam_3: { label: "left-backward", row: 3, col: 1 },
   cam_4: { label: "rear", row: 3, col: 2 },
   cam_5: { label: "right-backward", row: 3, col: 3 },
-  // cam_6 (map) only exists in stale Phase-1 shards; fresh shards pack map.jpg
+  // cam_6 (map) exists only in Phase-1 shards; later shards pack map.jpg
   // separately. Placed off the ego cell if present.
   cam_6: { label: "map", row: 1, col: 1 },
 };
@@ -125,7 +125,7 @@ export function rigCam(
   return { label: cam, row: Math.floor(index / 3) + 1, col: (index % 3) + 1 };
 }
 
-// camLabel returns just the rig position label (back-compat helper).
+// camLabel returns just the rig position label.
 export function camLabel(
   dataset: string,
   cam: string,
@@ -136,8 +136,7 @@ export function camLabel(
 
 // displayAspectRatio is the width/height a camera tile should reserve for a
 // dataset, so the frame matches the packed image and there is no letterbox gap.
-// KITScenes cameras are packed 256x256 (1:1); the default 16:9 is kept for the
-// other datasets to avoid changing their existing layout. The canvas still
+// KITScenes cameras are packed 256x256 (1:1); other datasets use 16:9. The canvas still
 // object-contain-fits the real bitmap, so a stray off-ratio image is letterboxed
 // rather than stretched — this only sets the frame's shape.
 const DATASET_ASPECT_RATIO: Record<string, number> = {

@@ -17,7 +17,7 @@
 - [ ] Minimum lateral clearance on cut-ins (RSS Rule 2)
 - [ ] Minimum clearance to occluded regions (RSS Rule 4 / exposure time)
 - [ ] Violation logging as a distinct metric, separate from driving-score benchmarks
-- [ ] Per-confidence-bucket reporting once the confidence head (above) is live
+- [ ] Per-confidence-bucket reporting once the confidence head is live
 
 Engineering-level approximations of rules 1, 2, and 4, chosen because they're the three most directly checkable against a predicted trajectory without
 needing a full multi-agent formal model.

@@ -37,9 +37,7 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# Colour table (RGB) — mirrors ls_type_to_color in ml_converter_vis_utils
-# ---------------------------------------------------------------------------
+# Colour table (RGB) mirroring ls_type_to_color in ml_converter_vis_utils.
 # Keys: (type_attr, subtype_attr). subtype=None matches any subtype.
 
 _RGB_TABLE: dict[tuple[str, str | None], tuple[int, int, int]] = {
@@ -213,7 +211,6 @@ def _cv_dashed(canvas, pts, ego, yaw, scale, rs, rgb, thickness, dash, gap):
     if len(pts) < 2:
         return
     px = _to_px(pts, ego, yaw, scale, rs).reshape(-1, 2)
-    # remove bgr swap — use rgb directly
     accum, drawing = 0.0, True
     for i in range(len(px) - 1):
         p0, p1 = px[i].astype(float), px[i + 1].astype(float)
@@ -287,7 +284,7 @@ def generate_bev_map_tile(
             elif b_type == "virtual":
                 _cv_line(canvas, pts, ego, yaw, scale, rs, _get_rgb("virtual", ""), lw)
 
-    # Pass 2: centerlines — dashed darkred
+    # Pass 2: centerlines, dashed darkred
     for llt in lanelets:
         if _attr(llt, "subtype") == "crosswalk":
             continue
@@ -323,10 +320,6 @@ def generate_bev_map_tile(
     interp = cv2.INTER_AREA if canvas_size < rs else cv2.INTER_LINEAR
     return cv2.resize(canvas, (canvas_size, canvas_size), interpolation=interp)
 
-
-# ---------------------------------------------------------------------------
-# Visualization — legend + display
-# ---------------------------------------------------------------------------
 
 # Legend entries matching ls_type_to_color in ml_converter_vis_utils
 _LEGEND_ENTRIES: list[tuple[str, tuple[float, float, float]]] = [
@@ -385,7 +378,6 @@ def visualise_bev_tile(
     plt.tight_layout()
     if save_path is not None:
         plt.savefig(save_path, dpi=150, bbox_inches="tight")
-        print(f"Saved {save_path}")
     else:
         plt.show()
     plt.close(fig)

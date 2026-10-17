@@ -1,4 +1,4 @@
-"""Tests for reasoning faithfulness / intervention eval (issue #98, R14).
+"""Tests for reasoning faithfulness / intervention eval.
 
 Mock backbone, no GPU / network. Covers:
     * reasoning_intervention_delta uses the current AutoE2E ABI and is ~0 at init
@@ -85,8 +85,7 @@ def test_intervention_does_not_leak_buffer_state(build_mock_model, device):
 
 
 def test_intervention_delta_responds_to_live_coupling(build_mock_model, device):
-    # Positive control (Design/horizon_reasoning_architecture.md §9.3): every test
-    # above pins the ZERO side, so an instrument that always read zero would pass
+    # Positive control: every test above pins the zero side, so an instrument that always read zero would pass
     # the whole suite. Force the zero-init coupling open and require the delta to
     # register — and to grow with the coupling strength.
     model = build_mock_model(

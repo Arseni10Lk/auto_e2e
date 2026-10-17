@@ -1,21 +1,15 @@
-"""End-to-end tests for AutoE2E after the #86 refactor.
+"""End-to-end tests for AutoE2E.
 
-Post-refactor contract (#88):
-- ``AutoE2E`` wraps ``Reactive_E2E``; the backbone / view fusion / map encoder /
+- ``AutoE2E`` wraps ``Reactive_E2E``; the backbone, view fusion, map encoder and
   planner all live under ``Reactive_E2E.*``.
-- ``forward(...)`` returns ONLY ``trajectory`` ``[B, num_timesteps*num_signals]``
-  in every mode. The old 3-tuple ``(loss/traj, ego_hidden, future_features)`` and
-  the BEV ``FutureState`` output were removed (the planner loss is computed
-  separately via ``compute_planner_loss``; see ``test_trajectory_planning.py``).
-- Only ``bev`` view fusion exists (``concat``/``cross_attn`` were removed).
+- ``forward(...)`` returns only ``trajectory`` ``[B, num_timesteps*num_signals]``
+  in every mode; the planner loss is computed separately (see
+  ``test_trajectory_planning.py``).
+- Only ``bev`` view fusion exists.
 """
-
-import sys
 
 import pytest
 import torch
-
-sys.path.append('..')
 
 
 def make_inputs(batch_size, num_views, device, include_camera_params=False):
@@ -29,10 +23,8 @@ def make_inputs(batch_size, num_views, device, include_camera_params=False):
     return visual, map_input, visual_history, egomotion
 
 
-# Submodule param-name prefixes that are actually exercised by the reactive
-# forward pass. FutureState is instantiated but unused in this path, and the
-# MapEncoder is gated by ResidualMapFusion's alpha=0 init, so neither receives
-# gradient at init — both are excluded from the gradient-coverage checks.
+# Submodule param-name prefixes exercised by the reactive forward pass, and
+# prefixes allowed to receive no gradient at init.
 USED_GROUPS = ["Reactive_E2E.Backbone", "Reactive_E2E.FeatureFusion",
                "Reactive_E2E.TrajectoryPlanner"]
 NO_GRAD_OK = (
@@ -293,13 +285,11 @@ class TestFullPipelineRobustness:
 # ---------------------------------------------------------------------------
 
 class TestRemovedGeometryKwargs:
-    """A caller passing pre-#77/#107 geometry must get an error, not pseudo BEV.
+    """A caller passing legacy geometry kwargs must get an error, not pseudo BEV.
 
-    ``forward`` takes ``**kwargs`` and hands them to the planner, which also takes
-    ``**kwargs``. So ``camera_params=<calibration>`` used to be absorbed at every
-    layer and dropped without a word, leaving the model on ``geometry_type="pseudo"``
-    — a learned prior. The run trains, converges and reports numbers; nothing says
-    the calibration was discarded. That is the failure this pins.
+    ``forward`` forwards ``**kwargs`` to the planner, which also takes
+    ``**kwargs``, so an unguarded ``camera_params=<calibration>`` would be
+    silently dropped and the model would stay on ``geometry_type="pseudo"``.
     """
 
     def test_camera_params_raises(self, build_mock_model, device):
@@ -325,8 +315,7 @@ class TestRemovedGeometryKwargs:
                   mode="infer", **{name: torch.randn(2, 7, 3, 4, device=device)})
 
     def test_error_names_the_replacement(self, build_mock_model, device):
-        """The message must be actionable: whoever hits it should not have to
-        go read the diff of #77 to find out what to pass instead."""
+        """The message must name what to pass instead."""
         model = build_mock_model(num_views=7, device=device)
         model.eval()
         visual, map_input, vis_hist, ego, camera_params = make_inputs(
@@ -342,8 +331,8 @@ class TestRemovedGeometryKwargs:
         assert "pseudo" in msg
 
     def test_unrelated_kwargs_still_pass_through(self, build_mock_model, device):
-        """Only the geometry names are rejected — **kwargs stays open for the
-        planner, so this guard must not become a general kwargs whitelist."""
+        """Only the geometry names are rejected; **kwargs stays open for the
+        planner."""
         model = build_mock_model(num_views=7, device=device)
         model.eval()
         visual, map_input, vis_hist, ego = make_inputs(2, 7, device)

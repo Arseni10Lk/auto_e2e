@@ -1,8 +1,7 @@
 # Pod Identity for console-api: read-only S3 (datasets + artifacts) and the
-# single DynamoDB cache table. The k8s ServiceAccount console/console-api has NO
-# role-arn annotation — Pod Identity binds the role to the SA here. Without this
-# the dashboard's API pods cannot read shards/stats and the UI is non-functional,
-# so it belongs in the dashboard-only deploy (unlike auth/Cognito, which do not).
+# single DynamoDB cache table. The k8s ServiceAccount console/console-api has no
+# role-arn annotation; Pod Identity binds the role to the SA here. Without it
+# the dashboard's API pods cannot read shards/stats.
 
 data "aws_caller_identity" "current" {}
 

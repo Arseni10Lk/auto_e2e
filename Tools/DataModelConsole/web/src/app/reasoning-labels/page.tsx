@@ -37,12 +37,10 @@ import type {
 } from "@/types";
 
 // ---------------------------------------------------------------------------
-// Chart palette (dataviz skill — references/palette.md, dark column). Each ODD
-// axis is a distinct ENTITY, so it gets one fixed categorical hue and every bar
-// in that axis shares it (bars compare magnitude within one series; color never
-// tracks rank). Validated as a set on the slate surface: all 8 clear the L band,
-// chroma floor, and 3:1 contrast (worst adjacent CVD ΔE 10.3 — the floor band,
-// legal here because bars carry visible value labels as the secondary channel).
+// Chart palette. Each ODD axis gets one fixed categorical hue shared by every
+// bar in that axis (bars compare magnitude within one series; color never
+// tracks rank). All hues clear 3:1 contrast on the slate surface; bars also
+// carry visible value labels, so color is not the only channel.
 const HUE = {
   blue: "#3987e5",
   aqua: "#199e70",
@@ -77,8 +75,7 @@ function pctLabel(count: number, total: number): string {
 // ---------------------------------------------------------------------------
 // One ODD-axis horizontal bar chart. Bars are max-normalized (widest = the
 // modal value), sorted desc, and each is a clickable button that drills into
-// the matching scenes. Bar height 16px (< 24px cap), square at the baseline
-// (left), 4px rounded data-end (right); labels/values wear text tokens only.
+// the matching scenes.
 // ---------------------------------------------------------------------------
 function AxisChart({
   title,

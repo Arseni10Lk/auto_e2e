@@ -73,7 +73,7 @@ The read-only [DataModelConsole dashboard](https://d2itskdqq39tx1.cloudfront.net
 git clone https://github.com/autowarefoundation/auto_e2e.git
 cd auto_e2e
 make setup                      # CPU torch wheels
-make setup TORCH_CHANNEL=cu118  # or a CUDA build (cu121, ... work too)
+make setup TORCH_CHANNEL=cu118  # or a CUDA build (cu126, cu128, ... work too)
 make test                       # optional: verify the install
 ```
 
@@ -96,7 +96,7 @@ The install check needs `make`, which you can get from a [package manager](https
 | [`nuplan-epoch-5`](https://huggingface.co/AutowareFoundation/auto_e2e/tree/main/models/nuplan-epoch-5) | nuPlan v1.1 | Zero-shot driving in new cities and fine-tuning on your data |
 | [`kitscenes-epoch-5`](https://huggingface.co/AutowareFoundation/auto_e2e/tree/main/models/kitscenes-epoch-5) | nuPlan, then KITScenes-Multimodal | Karlsruhe roads and the KITScenes camera rig |
 
-**3. Go further.** Read the [documentation and academic paper](https://autowarefoundation.github.io/auto_e2e/), explore the [Model](./Model/) folder, or follow the [Trial Guide](./TRIAL.md) to run inference on AWS EC2. Inference reaches up to **~76 FPS** (SwinV2-Tiny, feature-concat fusion, RTX 5080, batch 1); [BENCHMARKS.md](./Model/speed_benchmark/BENCHMARKS.md) has every GPU, backbone and batch size.
+**3. Go further.** Read the [documentation and academic paper](https://autowarefoundation.github.io/auto_e2e/), explore the [Model](./Model/) folder, or follow the [Trial Guide](./TRIAL.md) to run the test suite on AWS EC2. Inference reaches up to **~76 FPS** (SwinV2-Tiny, feature-concat fusion, RTX 5080, batch 1); [BENCHMARKS.md](./Model/speed_benchmark/BENCHMARKS.md) has every GPU, backbone and batch size.
 
 <img src="./Media/readme/section-community.svg" alt="Join the community" width="100%">
 

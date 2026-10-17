@@ -1,10 +1,9 @@
-"""DatasetSnapshot — the cache-provenance object threaded through every fan-out
-stage (#121 §3.4a).
+"""DatasetSnapshot, the cache-provenance object threaded through every fan-out stage.
 
 Flyte's task-cache key is (task interface, input literal values, cache_version).
 `FlyteDirectory` inputs hash by URI, and `cache_version="v1"` alone is a blunt
 global switch, so a code/spec change that leaves the raw inputs untouched would
-silently serve a STALE cached shard. To make the cache key reflect the REAL
+silently serve a stale cached shard. To make the cache key reflect the real
 determinants of a stage's output, every fan-out stage takes a DatasetSnapshot as
 an explicit input:
 
@@ -16,12 +15,12 @@ an explicit input:
 
 Because it's a frozen dataclass of primitives, Flyte serializes it into the cache
 key by value: bump ``source_revision`` (new data), a contract version (code
-change, §3.4c), or change the group set, and the affected ranges correctly MISS;
-leave them alone and a re-run is a cache no-op. This is what makes "extend from
-20 → 50 → all episodes" cheap — only the NEW ranges run (§3.4a).
+change), or change the group set, and the affected ranges miss the cache;
+leave them alone and a re-run is a cache no-op, so extending from 20 to 50 to
+all episodes only runs the new ranges.
 
-Kept Flyte-free (pure dataclass + hashlib) so it is unit-testable and importable
-from the parsers/tests without pulling in flytekit.
+Kept Flyte-free (pure dataclass + hashlib) so it is importable from the parsers
+and tests without pulling in flytekit.
 """
 
 from __future__ import annotations
@@ -41,7 +40,7 @@ from data_processing.contract_versions import (
 def group_metadata_digest(group_ids: Sequence[int | str]) -> str:
     """Stable digest of a resolved group-id set (episodes / clip uuids).
 
-    Order-independent (the SET of groups determines the output, not the order we
+    Order-independent (the set of groups determines the output, not the order we
     happened to enumerate them) and type-tagged so int episode 12 and the string
     "12" never collide. Deterministic across processes (blake2b, not the
     process-salted builtin hash) so re-runs reproduce the same key → cache hit.
@@ -92,7 +91,7 @@ def published_shard_name(
 
 @dataclass(frozen=True)
 class DatasetSnapshot:
-    """Immutable provenance of a dataset slice — the cache-key determinant (§3.4a).
+    """Immutable provenance of a dataset slice, the cache-key determinant.
 
     Every fan-out stage takes one as an input so its Flyte cache key reflects the
     data revision + code contracts + the exact group set it processed, not just

@@ -1,10 +1,8 @@
 """Camera frame loading for the NVIDIA PhysicalAI-Autonomous-Vehicles dataset.
 
-The dataset provides 7 real cameras. It has NO rendered map tile, so the map
-branch receives a zero tensor (``make_map_tile``) until a renderer is
-integrated. The map is NOT a camera view: it is kept out of ``visual_tiles`` (so
-it never enters the camera BEV projection) and routed to the model's separate
-map branch. Hence ``NUM_VIEWS = 7``.
+The dataset provides 7 real cameras and no rendered map tile, so the map
+branch receives a zero tensor (``make_map_tile``). The map is kept out of
+``visual_tiles`` so it never enters the camera BEV projection.
 """
 
 from __future__ import annotations
@@ -34,10 +32,8 @@ NUM_VIEWS = 7
 def make_map_tile(reference: torch.Tensor) -> torch.Tensor:
     """Return a zero map tile matching the shape/dtype of one raw camera frame.
 
-    NVIDIA has no rendered nav-map, so the map branch receives zeros for now.
-    Shaped like a single (3, H, W) frame for the model's map_input.
-
-    TODO: Replace with a real renderer once a map source is integrated.
+    NVIDIA has no rendered nav-map, so the map branch receives a zero
+    (3, H, W) frame.
     """
     return torch.zeros_like(reference)
 
@@ -48,19 +44,8 @@ def _egomotion_ts_to_frame_idx(
 ) -> int:
     """Find the camera frame index closest to an egomotion timestamp.
 
-    Both egomotion and camera timestamps are in microseconds relative to the
-    same clip anchor (t=0). This finds the camera frame whose timestamp is
-    nearest to the egomotion timestamp at the sample point.
-
-    Args:
-        egomotion_timestamp_us: Egomotion timestamp in microseconds at the
-            desired sample point, read directly from the egomotion parquet.
-        camera_timestamps_us: Pre-loaded array of camera timestamps in
-            microseconds for this clip+camera. Pass this from NvidiaAVDataset
-            to avoid re-reading the timestamps parquet on every __getitem__.
-
-    Returns:
-        0-based frame index into the video.
+    Both timestamps are in microseconds relative to the same clip anchor
+    (t=0). Returns a 0-based frame index into the video.
     """
     return int(np.argmin(np.abs(camera_timestamps_us - egomotion_timestamp_us)))
 
@@ -71,12 +56,10 @@ def load_front_clip(
     front_cam: str | None = None,
     camera_timestamps_us: np.ndarray | None = None,
 ) -> list[torch.Tensor]:
-    """Decode ONLY the front camera at a list of egomotion timestamps (a clip).
+    """Decode only the front camera at a list of egomotion timestamps.
 
-    For offline reasoning labeling the teacher needs a temporal FRONT-camera
-    clip (one frame per horizon), not all 7 cameras. This opens the front video
-    ONCE and decodes exactly the requested frames (one per timestamp), so a
-    5-horizon clip is a single-camera, 5-frame decode instead of 7-cam per frame.
+    Opens the front video once and decodes one frame per timestamp, for
+    offline reasoning labeling.
 
     Args:
         data_root / clip_uuid: locate the video.
@@ -85,7 +68,7 @@ def load_front_clip(
         camera_timestamps_us: pre-loaded front-cam timestamp array (optional).
 
     Returns:
-        list of RAW uint8 ``[3, H, W]`` front frames, one per input timestamp.
+        list of raw uint8 ``[3, H, W]`` front frames, one per input timestamp.
     """
     data_root = Path(data_root)
     front_cam = front_cam or CAMERA_NAMES[0]
@@ -106,16 +89,14 @@ def load_front_clip(
          for ts in egomotion_timestamps_us],
         dtype=np.int64,
     )
-    # Same fix as load_camera_frame (#116): a plain buffered file handle keeps
-    # PyAV's decoding lazy and seek-based instead of eagerly materializing the
-    # full encoded clip in memory before decoding.
+    # A plain buffered file handle keeps PyAV's decoding lazy and seek-based
+    # instead of materializing the full encoded clip in memory.
     with open(video_path, "rb") as video_data:
         reader = SeekVideoReader(video_data=video_data)
         try:
             rgb_frames = reader.decode_images_from_frame_indices(frame_indices)
         finally:
             reader.close()
-    # RAW uint8 CHW per frame, no preprocessing.
     return [torch.from_numpy(rgb_frames[i]).permute(2, 0, 1).contiguous()
             for i in range(len(frame_indices))]
 
@@ -127,12 +108,10 @@ def load_camera_frame(
     camera_names: list[str] | None = None,
     camera_timestamps: dict[str, np.ndarray] | None = None,
 ) -> torch.Tensor:
-    """Load the RAW camera frame aligned to an egomotion timestamp.
+    """Load the raw camera frames aligned to an egomotion timestamp.
 
-    Returns the decoded frame as an unmodified uint8 CHW tensor — no resize,
-    crop or normalize. The dataset is a pre-extraction source: the shard packer
-    owns the single, explicit, geometry-aware resize and the loader owns the
-    single normalize, so the projection ABI targets a known frame (#77).
+    Frames are unmodified uint8 CHW; the shard packer owns the resize and the
+    loader owns the normalize.
 
     Args:
         data_root: Root directory of the dataset subset.
@@ -177,19 +156,10 @@ def load_camera_frame(
 
         frame_idx = _egomotion_ts_to_frame_idx(egomotion_timestamp_us, timestamps_us)
 
-        # Fix for #116: SeekVideoReader wraps PyAV's av.open(), which accepts
-        # any read+seekable file-like object and performs lazy, seek-based
-        # reads internally (container.seek() + demux only the packets needed
-        # around the target frame's keyframe — see SeekVideoReader's own
-        # docstrings: keyframe indexing "is not costly as we are not decoding
-        # anything from the container"). The previous
-        # `io.BytesIO(video_path.read_bytes())` defeated that entirely by
-        # eagerly materializing the FULL encoded clip in memory before a
-        # single frame was requested, once per camera per __getitem__ call
-        # (7 cameras x full-clip read, every sample). A plain buffered file
-        # handle satisfies the same `.seek()` + read interface PyAV needs,
-        # so decoding stays lazy: only the bytes needed to reach the target
-        # frame's keyframe and decode forward are actually read from disk.
+        # SeekVideoReader wraps PyAV's av.open(), which seeks lazily on any
+        # seekable file object. Passing a plain buffered file handle (rather
+        # than reading the whole clip into BytesIO) means only the bytes from
+        # the target frame's keyframe onward are read from disk.
         with open(video_path, "rb") as video_data:
             reader = SeekVideoReader(video_data=video_data)
             try:
@@ -198,7 +168,6 @@ def load_camera_frame(
             finally:
                 reader.close()
 
-        # RAW uint8 CHW, no preprocessing (see module/function docstring).
         frame = torch.from_numpy(rgb_frames[0]).permute(2, 0, 1).contiguous()
         camera_tensors.append(frame)
 

@@ -158,9 +158,9 @@ test("fetch targets: nothing to do when the nearest backward anchor is loading",
 // what the hook must do across resolutions. `labelAt` returns a label id for a
 // present anchor or null for a scoped-404 (absent). Returns the number of
 // backward fetches issued so a runaway (fetch-storm) shows up as a large count.
-// This is the regression guard for the paused-stall bug: the pure contract must
-// converge to a present fallback within the sparse anchor set, and the hook (via
-// `tick` in its effect deps) must keep invoking it until it does.
+// While paused, the pure contract must converge to a present fallback within
+// the sparse anchor set, and the hook (via `tick` in its effect deps) must keep
+// invoking it until it does.
 function driveToStable(
   anchors: number[],
   frame: number,
@@ -191,7 +191,7 @@ function driveToStable(
 }
 
 test("paused backfill converges past scoped-404 anchors to the older present label", () => {
-  // Regression for the paused-stall bug: anchors 50 and 40 are candidates
+  // Anchors 50 and 40 are candidates
   // (has_reasoning any-run) but 404 in this scope; 30 has a label. Paused at 55,
   // the loop must walk 50 -> 40 -> 30 and end showing the label at 30.
   const anchors = [0, 10, 20, 30, 40, 50, 60];

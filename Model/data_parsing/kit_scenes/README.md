@@ -1,6 +1,6 @@
 # Data parsing recipe for [KIT Scenes Multimodal Dataset](https://kitscenes.com/multimodal/)
 
-Parser for the KITScenes Multimodal dataset, producing tensors directly consumable by AutoE2E's `forward()`.
+Parser for the KITScenes Multimodal dataset. It is a pre-extraction source for the shard packer.
 
 KITScenes ships per-frame JPEGs (not video), 6-DOF ego poses in `poses.txt`, and Lanelet2 HD maps. Cameras and ego poses share the 10 Hz reference timeline, so a single `frame_idx` indexes both. The four egomotion signals are *derived* from the pose stream by finite differencing — KITScenes does not store velocity/acceleration/curvature columns.
 
@@ -40,7 +40,7 @@ Without Lanelet2, map tiles fall back to zero tensors and the dataset still func
 - `egomotion_history` `(256,)` — fixed model ABI: 64 past timesteps × 4 signals at 10 Hz
 - `visual_history` `(896,)` — zero-initialised placeholder; populated during sequential inference
 - `trajectory_target` `(128,)` — fixed model ABI: 64 future timesteps × 2 signals
-- `camera_params` `(6, 3, 4)` — projection matrices `P = K_scaled @ T_ref_to_cam` for the 6 camera views, computed from KITScenes calibration and scaled to match the backbone's resize/crop transform.
+- `camera_params` `(6, 3, 4)` — projection matrices `P = K_scaled @ T_ref_to_cam` for the 6 camera views, computed from KITScenes calibration and scaled to the packed image size.
 
 
 The 6 camera views are the long-range front camera (`camera_base_front_center`) plus 5 surround ring cameras (`CAMERA_NAMES` in `camera.py`). `camera_ring_front` is omitted because it duplicates the long-range camera's approximately 88-degree forward coverage at a lower resolution. The narrower stereo front pair also remains outside the model input contract. The BEV map is a separate tensor and is not counted as a camera view.
@@ -75,8 +75,8 @@ benchmark evaluator applies the protocol's four-second observation window and
 reports the required 30-row and 50-row metrics without changing training.
 
 Internal model selection uses the frozen scene manifest at
-`training/splits/kitscenes_train_dev_v1.json`. Training verifies the packed
-partition count, empty-scene count, source revision, v2.2 pack contract,
+`training/splits/kitscenes_train_dev_v4.json`. Training verifies the packed
+partition count, empty-scene count, source revision, v3.5 pack contract,
 eligible scene digest, and complete sample UID digest before using its 40
 validation scenes (3,820 samples). The remaining 364 scenes contain 38,847
 training samples. A partial or different artifact set does not silently
@@ -89,95 +89,44 @@ generate a replacement holdout.
 from data_parsing.kit_scenes import KitScenesDataset
 from torch.utils.data import DataLoader
 
-# Whole split for training
+# Whole split
 dataset = KitScenesDataset(
     data_root="/path/to/kitscenes/data",   # the $KITSCENES_ROOT directory
-    backbone_name="swinv2_tiny_window8_256",
     split="train",
 )
 
-# Single scene for forward pass validation
+# Single scene for smoke tests
 dataset = KitScenesDataset(
     data_root="/path/to/kitscenes/data",
-    backbone_name="swinv2_tiny_window8_256",
     scene_ids=["c34c778f-ad8c-0aa9-7e1a-c86a73f887c7"],
 )
 
 loader = DataLoader(dataset, batch_size=8, shuffle=True, num_workers=4)
 
-# Training loop
 for batch in loader:
-    visual_tiles = batch["visual_tiles"].to(device)           # (B, 6, 3, H, W)
-    map_tile = batch["map_tile"].to(device)                   # (B, 3, H, W)
-    visual_history = batch["visual_history"].to(device)       # (B, 896)
-    egomotion_history = batch["egomotion_history"].to(device) # (B, 256)
-    trajectory_target = batch["trajectory_target"].to(device) # (B, 128)
-    camera_params = batch["camera_params"].to(device)         # (B, 6, 3, 4)
-
-    planner_loss, ego_hidden, future_visual_features = model(
-        visual_tiles,
-        map_tile,
-        visual_history,
-        egomotion_history,
-        camera_params=camera_params,
-        trajectory_target=trajectory_target,
-        mode="train",
-    )
-
-# Inference
-trajectory, ego_hidden, _ = model(
-    visual_tiles,
-    map_tile,
-    visual_history,
-    egomotion_history,
-    camera_params=camera_params,
-    mode="infer",
-)
+    visual_tiles = batch["visual_tiles"]            # (B, 6, 3, H, W) uint8
+    map_tile = batch["map_tile"]                    # (B, 3, H, W)
+    egomotion_history = batch["egomotion_history"]  # (B, 256)
+    trajectory_target = batch["trajectory_target"]  # (B, 128)
+    camera_params = batch["camera_params"]          # (B, 6, 3, 4)
 ```
 
 ## Image preprocessing
 
-Preprocessing is derived at runtime from the backbone's own config via timm, so normalisation, resize, and crop match the backbone's training:
-
-```python
-data_config = timm.data.resolve_model_data_config(backbone)
-transform = timm.data.create_transform(**data_config, is_training=False)
-```
+Camera tensors are resized to `image_size` (default 256) but stay unnormalized uint8. Packing JPEG-encodes them, and the pre-extracted loader performs the only normalization. `backbone_name` is accepted and ignored.
 
 ## BEV map tile
 
-### Rasterized maps (temporary, pending vectorized encoder)
+### Rasterized maps
 
 `map.generate_bev_map_tile` rasterizes a semantic, ego-centric tile from the scene's Lanelet2 HD map using OpenCV: road borders, lane dividers, centerlines, stop lines, and pedestrian crossings, coloured to mirror the SDK's `lanelet2_ml_converter` conventions. The tile is rotated so the ego heading points up (forward = up, left = left).
 
 Ego poses and the lanelet boundaries share the scene-local frame (metres from the map origin, axes aligned with UTM 32N); the tile is centred by subtracting the ego position, so the absolute offset cancels. 
 
-**Important:** This rasterized map implementation for this dataset is **only applicable if the model will train using raster map representations**. The architecture is designed to support both vectorized (implementation pending) and rasterized map encoders. The `map.py` module serves as a reference implementation should rasterized maps be needed in the future.
-
 
 ### Benchmarking on-demand vs. pre-rendered maps
 
-**Note:** The `rasterize_map_at_runtime` flag is provided for benchmarking. Currently, setting it to `False` (by running `forward_pass_test` with the `--no-rasterize-maps` flag) uses zero tensor fallback; actual pre-rendered raster map tile loading is not yet implemented.
+The `rasterize_map_at_runtime` flag is provided for benchmarking. Pre-rendered tile loading is not implemented, so `False` returns zero tiles.
 
 - `rasterize_map_at_runtime=True` (default): On-demand runtime rasterization of Lanelet2 map tiles via `map.generate_bev_map_tile`
 - `rasterize_map_at_runtime=False`: Zero tensor fallback, representative of scenarios without map data or pre-rendered/cached maps
-
-## Forward pass test
-
-Run from the repo root's `Model` directory. Use the absolute `$KITSCENES_ROOT` for `--dataset_root`:
-
-```bash
-cd Model/data_parsing/kit_scenes
-python forward_pass_test.py \
-    --dataset_root "$KITSCENES_ROOT" \
-    --scene_id c34c778f-ad8c-0aa9-7e1a-c86a73f887c7
-```
-
-Whole split, or offline/CI without pretrained weights:
-
-```bash
-python forward_pass_test.py --dataset_root "$KITSCENES_ROOT" --split train
-python forward_pass_test.py --dataset_root "$KITSCENES_ROOT" --scene_id <uuid> --no-pretrained
-```
-
-The test exercises both inference (`mode="infer"`) and training (`mode="train"`) modes with BEV fusion, including camera projection matrices.

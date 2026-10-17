@@ -1,16 +1,15 @@
 """Unit tests for the Bezier trajectory planner.
 
-Post-refactor (#88): the planner ``forward`` performs inference and returns
-ONLY the trajectory ``[B, num_timesteps*num_signals]`` (no ego_hidden), and the
-per-planner ``compute_planner_loss`` was removed — the training objective lives
-in the training loop. AutoE2E.forward returns the trajectory directly. Only the
-``bev`` view fusion and the ``bezier``/``flow_matching`` planners remain.
+The planner ``forward`` performs inference and returns only the trajectory
+``[B, num_timesteps*num_signals]``; the training objective lives in the training
+loop. AutoE2E.forward returns the trajectory directly.
 """
 
 import pytest
 import torch
 import torch.nn as nn
 
+from model_components.fused_feature_pooling import FusedFeaturePooling
 from model_components.trajectory_planning import (
     BasePlanner,
     BezierPlanner,
@@ -20,6 +19,9 @@ from model_components.trajectory_planning import (
 EMBED_DIM = 256
 EGO_DIM = 256
 VIS_DIM = 896
+# The planner consumes the pooled fused-BEV vector from FusedFeaturePooling
+# (a 75 x 50 single-channel grid flattened), not a spatial BEV map.
+POOLED_BEV_DIM = 75 * 50
 
 
 class _MockBackbone(nn.Module):
@@ -28,7 +30,8 @@ class _MockBackbone(nn.Module):
 
     def __init__(self, backbone="swin_v2_tiny", is_pretrained=True, **kwargs):
         super().__init__()
-        self.backbone_channels = 1440
+        self.feature_channels = [96, 192, 384, 768]
+        self.backbone_channels = sum(self.feature_channels)
         self._stages = nn.ModuleList([
             nn.Sequential(nn.Conv2d(3, 96, 3, 1, 1), nn.AdaptiveAvgPool2d(64)),
             nn.Sequential(nn.Conv2d(96, 192, 3, 1, 1), nn.AdaptiveAvgPool2d(32)),
@@ -44,8 +47,8 @@ class _MockBackbone(nn.Module):
         return outs
 
 
-def _make_inputs(batch_size, device, h=8, w=8):
-    bev = torch.randn(batch_size, EMBED_DIM, h, w, device=device)
+def _make_inputs(batch_size, device):
+    bev = torch.randn(batch_size, POOLED_BEV_DIM, device=device)
     visual_history = torch.randn(batch_size, VIS_DIM, device=device)
     egomotion_history = torch.randn(batch_size, EGO_DIM, device=device)
     return bev, visual_history, egomotion_history
@@ -89,12 +92,22 @@ def test_registry_rejects_unknown():
 
 
 def test_resolution_invariant_to_bev_size(device):
-    """Planner must accept any BEV spatial resolution (global pooling)."""
+    """FusedFeaturePooling + planner must accept any BEV spatial resolution."""
+    pooling = FusedFeaturePooling(embed_dim=EMBED_DIM).to(device)
     planner = BezierPlanner(embed_dim=EMBED_DIM).to(device)
-    for h, w in [(8, 8), (45, 30), (7, 7)]:
-        bev, vis, ego = _make_inputs(2, device, h=h, w=w)
-        trajectory = planner(bev, vis, ego)
+    _, vis, ego = _make_inputs(2, device)
+    for h, w in [(8, 8), (45, 30), (7, 7), (450, 300)]:
+        bev = torch.randn(2, EMBED_DIM, h, w, device=device)
+        trajectory = planner(pooling(bev), vis, ego)
         assert trajectory.shape == (2, 128)
+
+
+def test_rejects_unpooled_bev_map(device):
+    """A spatial BEV map must fail loudly instead of a cryptic cat error."""
+    planner = BezierPlanner(embed_dim=EMBED_DIM).to(device)
+    _, vis, ego = _make_inputs(2, device)
+    with pytest.raises(ValueError, match="pooled"):
+        planner(torch.randn(2, EMBED_DIM, 8, 8, device=device), vis, ego)
 
 
 def test_configurable_timesteps_and_signals(device):
@@ -184,7 +197,7 @@ def test_autoe2e_with_bezier_planner_train_mode(device):
 
 
 def test_autoe2e_default_planner_is_bezier(device):
-    """The default planner is the Bezier planner (GRU was removed in #86)."""
+    """AutoE2E defaults to the Bezier planner."""
     from unittest.mock import patch
 
     from model_components.auto_e2e import AutoE2E

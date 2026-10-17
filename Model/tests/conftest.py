@@ -1,10 +1,9 @@
 """Shared test fixtures with mock backbone for fast unit tests.
 
-The real backbone (SwinV2/ConvNeXt) dominates test time (~80% per forward pass)
-but is never the subject under test — it is pretrained and frozen. We replace it
-with a lightweight stub that produces tensors of the correct shape, reducing
-per-forward cost from ~50ms to <1ms while still exercising View Fusion,
-GRUPlanner, and FutureState end-to-end.
+The real backbone (SwinV2/ConvNeXt) dominates test time but is never the
+subject under test, so it is replaced with a lightweight stub that produces
+tensors of the correct shape while still exercising view fusion and the
+trajectory planner end-to-end.
 
 Tests use a small BEV grid (8x8) for the ``bev`` fusion mode; the production
 default (450x300) is verified separately via configuration tests.
@@ -26,14 +25,11 @@ class MockBackboneModel(nn.Module):
       Stage 2: [B*V, 384, 16, 16]
       Stage 3: [B*V, 768,  8,  8]
 
-    Uses adaptive pooling after each conv to guarantee correct spatial dims
-    regardless of input resolution, keeping gradients flowing for
-    gradient-flow tests.
+    Adaptive pooling after each conv guarantees the spatial dims regardless of
+    input resolution while keeping gradients flowing.
 
-    NOTE: produces 4 feature maps, matching Swin/ConvNeXt backbones.
-    ResNet50 in timm exposes 5 feature stages, so this mock does NOT
-    cover that backbone — tests exercising ResNet50 must use a real
-    backbone or a separate mock.
+    Only the 4-stage Swin/ConvNeXt layout is covered; timm's ResNet50 exposes
+    5 stages and needs a real backbone or a separate mock.
     """
 
     def __init__(self):
@@ -86,19 +82,21 @@ def _build_model_with_mock_backbone(num_views, fusion_mode="bev", device=None,
                                     **model_kwargs):
     """Construct AutoE2E with the mock backbone injected.
 
-    Post-refactor (#86): the model is ``AutoE2E`` -> ``Reactive_E2E`` and the
-    image backbone now lives in ``reactive_e2e``; fusion is always BEV
-    (concat/cross_attn were removed) and GRU was dropped. ``fusion_mode`` is
-    accepted for backward-compatibility with existing call sites but ignored
-    (always BEV at a small 8x8 grid). Extra ``model_kwargs`` are forwarded.
+    The backbone is patched in ``reactive_e2e``. Fusion is always BEV at a small
+    8x8 grid; ``fusion_mode`` is accepted for call-site compatibility but
+    ignored. Extra ``model_kwargs`` are forwarded to ``AutoE2E``.
     """
     from unittest.mock import patch
     from model_components.auto_e2e import AutoE2E
 
+    view_fusion_kwargs = {"bev_h": 8, "bev_w": 8}
+    view_fusion_kwargs.update(
+        model_kwargs.pop("view_fusion_kwargs", {})
+    )
     with patch('model_components.reactive_e2e.Backbone', MockBackbone):
         model = AutoE2E(
             num_views=num_views,
-            view_fusion_kwargs={"bev_h": 8, "bev_w": 8},
+            view_fusion_kwargs=view_fusion_kwargs,
             num_timesteps=num_timesteps,
             planner_mode=planner_mode,
             planner_kwargs=planner_kwargs,
@@ -121,11 +119,10 @@ def build_mock_model():
 
 @pytest.fixture(scope="session", params=["bev"])
 def model(request, device):
-    """Session-scoped model with mock backbone — shared across all tests.
+    """Session-scoped model with mock backbone, shared across all tests.
 
-    Post-refactor only BEV fusion exists. Built once to avoid redundant
-    construction overhead; gradient state is reset before each test via the
-    autouse fixture below.
+    Gradient and train-mode state is reset after each test by the autouse
+    fixture below.
     """
     return _build_model_with_mock_backbone(
         num_views=7, fusion_mode=request.param, device=device

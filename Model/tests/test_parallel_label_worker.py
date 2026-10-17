@@ -1,13 +1,13 @@
-"""Process-parallel labeling worker correctness (#98 labeling audit).
+"""Process-parallel labeling worker correctness.
 
 Guards two silent-failure classes in the ProcessPool labeler:
   * init_worker's positional args must map exactly to what workflows.py passes
     (a swap would build a different dataset and mislabel silently); in particular
     raw_path must reach L2DDataset as root= so a fan-out partition reads its
-    materialized raw instead of re-hitting HF (#121 option B);
+    materialized raw instead of re-hitting HF;
   * label_sample must call the teacher with the GLOBAL sample_uid and report an
-    abstained record as such (there is NO per-sample cache anymore, §3.4 — the
-    parent aggregates records into one records.jsonl).
+    abstained record as such (there is no per-sample cache; the parent
+    aggregates records into one records.jsonl).
 No network / GPU: dependencies are monkeypatched.
 """
 
@@ -37,10 +37,10 @@ def test_init_worker_positional_arg_mapping(monkeypatch):
         "data_processing.reasoning_label_generation.teacher_client.build_teacher",
         _fake_build_teacher)
 
-    # EXACT tuple workflows.py builds (§3.4 removed cache_bucket):
+    # Exact tuple workflows.py builds:
     # (repo_id, episodes, dataset_name, teacher, teacher_kwargs, prompt_version,
     #  raw_path). L2D path (not NVIDIA). raw_path="/part/raw" → the labeler must
-    # pass it as root= so lerobot reads the partition's materialized raw (option B).
+    # pass it as root= so lerobot reads the partition's materialized raw.
     pl.init_worker("yaak-ai/L2D", [10, 11, 12], "yaak-ai/L2D", "openai_compatible",
                    {"base_url": "u", "strict": False}, "promptX", "/part/raw")
 
@@ -49,7 +49,7 @@ def test_init_worker_positional_arg_mapping(monkeypatch):
     assert captured["clip_only"] is True                # front-clip mode
     assert captured["root"] == "/part/raw"              # reads materialized raw, no HF re-hit
     assert captured["teacher"] == "openai_compatible"
-    # No cache is built anymore: the module global _CACHE no longer exists.
+    # No per-sample cache: the module has no _CACHE global.
     assert not hasattr(pl, "_CACHE")
 
 
@@ -80,7 +80,7 @@ def test_label_sample_calls_teacher_with_global_uid(monkeypatch):
 
     si, rec_json, status = pl.label_sample(7)
     assert si == 7
-    # keyed by the GLOBAL uid, not the positional index (#121 §3.1)
+    # keyed by the GLOBAL uid, not the positional index
     assert seen["sample_id"] == "l2d-v1-e000000-f000007"
     assert seen["n_frames"] == 5                    # 5 front horizons
     # an abstained teacher response is reported as such (masked out of the loss);

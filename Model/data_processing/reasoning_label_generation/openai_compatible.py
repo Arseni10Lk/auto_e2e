@@ -1,4 +1,4 @@
-"""OpenAI-compatible teacher backend (issue #98, R2/R9).
+"""OpenAI-compatible teacher backend.
 
 Speaks the OpenAI chat-completions API, so the backend behind the URL can be
 Cosmos3-Nano on vLLM / vLLM-Omni, a Qwen server, an external API, or a local
@@ -9,7 +9,7 @@ Testability: the network boundary is a single injectable ``transport`` callable
 ``(url, payload, headers) -> parsed-JSON-dict``, so unit tests run with a stub
 (no network, no GPU). ``strict=True`` (default) raises on endpoint/parse failure;
 ``strict=False`` returns an abstained record so a bad response is marked, never
-silently turned into all-zero labels (R9).
+silently turned into all-zero labels.
 """
 
 from __future__ import annotations
@@ -35,9 +35,9 @@ def _tensor_to_data_url(img: Any, max_edge: int = 512) -> str:
     The teacher only needs the scene semantics, not raw sensor resolution. Raw
     frames are large (L2D is 1920x1080 x N cams); sending them verbatim makes the
     vision model process tens of thousands of image tokens per call, so a single
-    label takes many minutes. We downscale so the longest edge is ``max_edge`` and
-    use JPEG (not PNG) to keep the payload small — turning a ~14 MB, multi-minute
-    request into a small, sub-second one. ``max_edge<=0`` disables downscaling.
+    label takes many minutes. Frames are downscaled so the longest edge is
+    ``max_edge`` and encoded as JPEG to keep the payload small.
+    ``max_edge<=0`` disables downscaling.
     """
     from torchvision.transforms.functional import to_pil_image
 
@@ -79,7 +79,7 @@ class OpenAICompatibleTeacher(TeacherClient):
     """Offline autolabeller backed by any OpenAI-compatible endpoint.
 
     Args:
-        base_url: e.g. ``"http://localhost:8000/v1"`` (the Cosmos3-Nano vLLM PoC).
+        base_url: e.g. ``"http://localhost:8000/v1"``.
         model: model name (e.g. ``"cosmos3-nano"``).
         api_key: optional bearer token.
         timeout / max_tokens: default-transport request params.

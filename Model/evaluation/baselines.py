@@ -1,13 +1,8 @@
-"""Open-loop evaluation baselines (#66 §5).
+"""Training-free open-loop baselines in the model's ``(accel, curv)`` action space.
 
-Simple, training-free baselines in the model's action space ``(accel, curv)``,
-so they can be scored with the same metrics as AutoE2E. Their purpose is to
-reveal whether the perception pipeline contributes **beyond ego-status
-extrapolation** — if the model barely beats constant-velocity, perception isn't
-helping yet (the ego-status critique of nuScenes planning, Zhai et al. 2023).
-
-The trained "ego-status MLP" baseline from the proposal needs training and is a
-follow-up; these are the zero-training references.
+They show whether perception contributes beyond ego-status extrapolation: if the
+model barely beats constant-velocity, perception is not helping (the ego-status
+critique of nuScenes planning, Zhai et al. 2023).
 """
 
 from __future__ import annotations

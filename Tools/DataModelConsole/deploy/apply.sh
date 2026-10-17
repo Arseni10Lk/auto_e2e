@@ -162,10 +162,9 @@ apply_deployment() {
         kubectl apply -f -
 }
 
-# Namespace first, then config/identity, then network + policy. Web is rolled
-# out before API because it can read both the legacy array and paginated API
-# envelopes; once every Web pod is compatible, the API contract can change
-# without a mixed-replica outage.
+# Namespace first, then config/identity, then network + policy. Web rolls out
+# before API so every Web pod understands the API response shape before the
+# API changes.
 kubectl apply -f "${K8S_DIR}/namespace.yaml"
 for manifest_name in configmap.yaml serviceaccount.yaml; do
     apply_manifest "${manifest_name}"
