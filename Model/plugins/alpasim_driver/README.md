@@ -34,7 +34,9 @@ Against packed KITScenes v3.5 samples rebuilt from raw `poses.txt`, the projecti
 [`configs/calibration/`](./alpasim_autoe2e/configs/calibration/) holds one JSON file per dataset rig. Each file stores native intrinsics, image size, camera-to-reference extrinsics and the model slot of every camera. The driver picks the profile whose cameras equal `driver.inference.use_cameras`.
 
 - `kit_scenes.json` was exported with [`tools/export_kitscenes_calibration.py`](./tools/export_kitscenes_calibration.py). It matches 89 of the 117 KITScenes validation scenes. The other 28 use a later calibration revision, about 7 cm and 1° apart. For a world recorded with that revision, export its profile and set `AUTOE2E_RIG_PROFILE=/path/to/profile.json`.
-- The reference frame of a profile must be the rig frame of the rendered world. For KITScenes, that is the frame of `poses.txt`.
+- nuPlan v1.1: export a profile from one log database with [`tools/export_nuplan_calibration.py`](./tools/export_nuplan_calibration.py). The cameras keep their channel names (`CAM_F0`, ...). Training undistorts nuPlan images, so the profile holds the rectified pinhole intrinsics, and the world must render rectified cameras. nuPlan calibration differs per vehicle; pick the log of the vehicle the world was recorded with.
+- A profile also states the dataset's curvature rule (`egomotion`): KITScenes divides by `max(speed, 0.1)`, while nuPlan zeroes curvature below 0.5 m/s and clips it to ±0.5.
+- The reference frame of a profile must be the rig frame of the rendered world. For KITScenes, that is the frame of `poses.txt`; for nuPlan, the ego pose.
 
 ## Configuration
 

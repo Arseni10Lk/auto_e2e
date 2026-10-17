@@ -170,6 +170,82 @@ def test_profile_override_from_environment(tmp_path: Path, monkeypatch) -> None:
     assert find_rig_profile(KIT_CAMERAS).name == "kit_scenes_revision_b"
 
 
+def test_nuplan_profile_export_rectifies_the_camera_table(tmp_path: Path, monkeypatch) -> None:
+    """Export a profile from a nuPlan-style ``camera`` table and drive with it."""
+    cv2 = pytest.importorskip("cv2")
+    import pickle
+    import sqlite3
+    import subprocess
+
+    channels = ["CAM_F0", "CAM_L0", "CAM_R0", "CAM_L2", "CAM_B0", "CAM_R2"]
+    intrinsic = np.array([[1545.0, 0.0, 960.0], [0.0, 1545.0, 560.0], [0.0, 0.0, 1.0]])
+    distortion = np.array([-0.35, 0.17, -0.002, 0.0005, -0.05])
+    database = tmp_path / "2021.05.12.22.00.38_veh-35_01008_01518.db"
+    with sqlite3.connect(database) as connection:
+        connection.execute("CREATE TABLE log (vehicle_name TEXT)")
+        connection.execute("INSERT INTO log VALUES ('veh-35')")
+        connection.execute(
+            "CREATE TABLE camera (channel TEXT, translation BLOB, rotation BLOB, "
+            "intrinsic BLOB, distortion BLOB, width INTEGER, height INTEGER)"
+        )
+        for index, channel in enumerate(channels):
+            yaw = np.radians(60.0 * index)
+            # OpenCV camera axes (z forward, x right, y down) turned by ``yaw``.
+            rotation = np.array(
+                [[np.sin(yaw), 0.0, np.cos(yaw)], [-np.cos(yaw), 0.0, np.sin(yaw)], [0.0, -1.0, 0.0]]
+            )
+            w = np.sqrt(1.0 + np.trace(rotation)) / 2.0
+            quaternion = [
+                w,
+                (rotation[2, 1] - rotation[1, 2]) / (4 * w),
+                (rotation[0, 2] - rotation[2, 0]) / (4 * w),
+                (rotation[1, 0] - rotation[0, 1]) / (4 * w),
+            ]
+            connection.execute(
+                "INSERT INTO camera VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    channel,
+                    pickle.dumps([1.5, 0.1 * index, 1.6]),
+                    pickle.dumps(quaternion),
+                    pickle.dumps(intrinsic),
+                    pickle.dumps(distortion),
+                    1920,
+                    1080,
+                ),
+            )
+    output = tmp_path / "nuplan.json"
+    subprocess.run(
+        [sys.executable, str(_PLUGIN_DIR / "tools" / "export_nuplan_calibration.py"), str(database), str(output)],
+        check=True,
+    )
+
+    profile = load_rig_profile(output)
+    assert profile.dataset_name == "nuplan/nuplan-v1.1"
+    assert [c.slot for c in profile.cameras] == KIT_SLOTS
+    assert [c.logical_id for c in profile.cameras] == channels
+    rectified, _ = cv2.getOptimalNewCameraMatrix(intrinsic, distortion, (1920, 1080), 0.0, (1920, 1080))
+    assert np.allclose(profile.cameras[0].intrinsic, rectified)
+    assert np.allclose(profile.cameras[1].camera_to_reference[:3, 3], [1.5, 0.1, 1.6])
+    assert np.allclose(profile.cameras[1].camera_to_reference[:3, 2], [0.5, np.sqrt(3) / 2, 0.0])
+
+    monkeypatch.setenv("AUTOE2E_RIG_PROFILE", str(output))
+    nuplan_driver = AutoE2EDriver(MOCK_CHECKPOINT, channels)
+    inputs = nuplan_driver.parser.parse(_prediction_input(cameras=channels)).model_inputs
+    assert inputs["front_camera_tile"].shape == (1, 3, 1024, 1024)
+
+
+def test_nuplan_curvature_rule_zeroes_and_clips() -> None:
+    from alpasim_autoe2e.config import EgomotionRule
+
+    rule = EgomotionRule(
+        curvature_speed_floor_mps=0.5, curvature_zero_below_mps=0.5, curvature_limit=0.5
+    )
+    speed = np.array([0.2, 1.0, 1.0, 10.0])
+    yaw_rate = np.array([0.1, 0.2, 2.0, 0.5])
+    assert np.allclose(rule.curvature(yaw_rate, speed), [0.0, 0.2, 0.5, 0.05])
+    assert np.allclose(EgomotionRule().curvature(yaw_rate, speed), [0.5, 0.2, 2.0, 0.05])
+
+
 def test_projection_scales_intrinsics_per_axis() -> None:
     camera = load_rig_profile(CALIBRATION_DIR / "kit_scenes.json").cameras[1]
     projection = camera.projection((512, 512))

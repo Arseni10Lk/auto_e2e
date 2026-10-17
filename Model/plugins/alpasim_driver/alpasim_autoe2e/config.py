@@ -57,6 +57,27 @@ class CameraCalibration:
 
 
 @dataclass(frozen=True)
+class EgomotionRule:
+    """How a dataset turns yaw rate into curvature.
+
+    The defaults are ``data_parsing/kit_scenes/egomotion.py``; nuPlan zeroes
+    and clips it (``_state_signals`` in ``data_parsing/nuplan/packing.py``).
+    """
+
+    curvature_speed_floor_mps: float = 0.1
+    curvature_zero_below_mps: float | None = None
+    curvature_limit: float | None = None
+
+    def curvature(self, yaw_rate: np.ndarray, speed: np.ndarray) -> np.ndarray:
+        curvature = yaw_rate / np.maximum(speed, self.curvature_speed_floor_mps)
+        if self.curvature_zero_below_mps is not None:
+            curvature = np.where(speed > self.curvature_zero_below_mps, curvature, 0.0)
+        if self.curvature_limit is not None:
+            curvature = np.clip(curvature, -self.curvature_limit, self.curvature_limit)
+        return curvature
+
+
+@dataclass(frozen=True)
 class RigProfile:
     """Camera rig of one dataset, as recorded in a calibration JSON file."""
 
@@ -66,6 +87,7 @@ class RigProfile:
     native_front_camera_tile: bool
     """Whether the model also receives the full-resolution front camera."""
     cameras: tuple[CameraCalibration, ...]
+    egomotion: EgomotionRule = EgomotionRule()
 
     @property
     def logical_ids(self) -> list[str]:
@@ -105,6 +127,7 @@ def load_rig_profile(path: str | Path) -> RigProfile:
         dataset_name=payload["dataset_name"],
         native_front_camera_tile=bool(payload.get("native_front_camera_tile", False)),
         cameras=cameras,
+        egomotion=EgomotionRule(**payload.get("egomotion", {})),
     )
 
 

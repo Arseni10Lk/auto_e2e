@@ -61,6 +61,12 @@ def main() -> None:
         ),
         # KITScenes shards pack the front camera at 1024 px (front_camera_tile).
         "native_front_camera_tile": True,
+        # data_parsing/kit_scenes/egomotion.py: yaw_rate / max(speed, 0.1).
+        "egomotion": {
+            "curvature_speed_floor_mps": 0.1,
+            "curvature_zero_below_mps": None,
+            "curvature_limit": None,
+        },
         "cameras": cameras,
     }
     text = json.dumps(profile, indent=2)

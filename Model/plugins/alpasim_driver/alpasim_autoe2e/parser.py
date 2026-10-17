@@ -45,7 +45,7 @@ from training.dataset_policy import (
     training_policy_for_dataset,
 )
 
-from .config import IMAGE_MEAN, IMAGE_STD, CameraCalibration, RigProfile
+from .config import IMAGE_MEAN, IMAGE_STD, CameraCalibration, EgomotionRule, RigProfile
 
 CONTEXT_FRAMES = REACTIVE_BEVFORMER_HISTORY_FRAMES + 1
 """Camera frames per view the model consumes: seven history frames plus t0."""
@@ -58,7 +58,6 @@ EGOMOTION_SPAN_US = int((AUTO_E2E_TIMESTEPS + 1) * EGOMOTION_DT_S * 1_000_000)
 
 # Same tolerance as the KITScenes T8 history check in data_parsing/kit_scenes.
 _FRAME_TIMESTAMP_TOLERANCE_US = 50_000
-_MIN_SPEED = 0.1
 
 
 @dataclass
@@ -89,14 +88,17 @@ def pose_trajectory(ego_pose_history: list[Any]) -> Trajectory:
     )
 
 
-def egomotion_from_poses(trajectory: Trajectory, t0_us: int) -> np.ndarray:
+def egomotion_from_poses(
+    trajectory: Trajectory, t0_us: int, rule: EgomotionRule = EgomotionRule()
+) -> np.ndarray:
     """Return the ``(64, 4)`` egomotion history ending one step before ``t0``.
 
     Mirrors ``poses_to_arrays`` / ``load_egomotion`` in
     ``data_parsing/kit_scenes/egomotion.py``: speed is the ground-plane speed,
     acceleration its time derivative, yaw rate the derivative of the unwrapped
-    yaw and curvature ``yaw_rate / max(speed, 0.1)``, all by ``np.gradient`` on
-    a 10 Hz grid. The rows are the 64 samples before ``t0``, as in training.
+    yaw and curvature from the dataset's ``rule`` (``yaw_rate / max(speed,
+    0.1)`` for KITScenes), all by ``np.gradient`` on a 10 Hz grid. The rows are
+    the 64 samples before ``t0``, as in training.
     """
     steps = np.arange(-(AUTO_E2E_TIMESTEPS + 1), 1)
     times_us = t0_us + (steps * EGOMOTION_DT_S * 1_000_000).astype(np.int64)
@@ -111,7 +113,7 @@ def egomotion_from_poses(trajectory: Trajectory, t0_us: int) -> np.ndarray:
     speed = np.linalg.norm(velocity, axis=1)
     acceleration = np.gradient(speed, EGOMOTION_DT_S)
     yaw_rate = np.gradient(np.unwrap(yaws), EGOMOTION_DT_S)
-    curvature = yaw_rate / np.maximum(speed, _MIN_SPEED)
+    curvature = rule.curvature(yaw_rate, speed)
     egomotion = np.stack([speed, acceleration, yaw_rate, curvature], axis=1)
     # Drop the extra leading row and t0 itself: training rows are [t0-64, t0).
     return egomotion[1:-1].astype(np.float32)
@@ -280,7 +282,7 @@ class AlpasimStreamParser:
             )
         )
 
-        egomotion = torch.from_numpy(egomotion_from_poses(trajectory, t0_us))
+        egomotion = torch.from_numpy(egomotion_from_poses(trajectory, t0_us, self.profile.egomotion))
         egomotion_history = adapt_egomotion_history(
             egomotion.reshape(1, AUTO_E2E_TIMESTEPS * EGOMOTION_SIGNALS), self.policy
         )
