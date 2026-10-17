@@ -38,6 +38,10 @@ The closed-loop reinforcement learning framework consists of three primary compo
 
 ## 3. Dataset Choice
 
+The plugin itself is designed to support swappable datasets with varying camera configurations. Primarily, there are two candidates for reinforcment learning, which are the same datasets that were used for Reactive model training:
+
+### 3.1 KITScenes Multimodal
+
 The **KITScenes Multimodal** dataset is the primary foundation for closed-loop world generation and RL training.
 
 **Justification:**
@@ -46,7 +50,7 @@ The **KITScenes Multimodal** dataset is the primary foundation for closed-loop w
 - **RL Viability**: Designed explicitly for end-to-end driving and novel view synthesis, supplying the dense trajectory and visual data required to simulate realistic closed-loop consequences.
 
 
-### 3.1 The USDZ Reconstruction Challenge
+#### 3.1.1 The USDZ Reconstruction Challenge
 
 The primary challenge introduced by coupling KITScenes with AlpaSim is a fundamental mismatch in required data formats. 
 
@@ -56,6 +60,8 @@ The primary challenge introduced by coupling KITScenes with AlpaSim is a fundame
 
 **The Resolution:**
 To bridge this gap, a prerequisite data pipeline step is necessary: a **KITScenes-to-NCore (USDZ) conversion**. We must run an offline 3D Gaussian Splatting reconstruction pipeline on the raw KITScenes data to compile the required `.usdz` artifacts, allowing the NuRec renderer to successfully boot and supply multi-view rendering for our RL loop.
+
+### 3.2 NuPlan
 
 ## 4. World Renderer Choice
 
