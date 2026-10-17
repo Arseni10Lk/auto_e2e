@@ -4,8 +4,8 @@ nuPlan training images are undistorted to a rectified pinhole (OpenCV
 ``getOptimalNewCameraMatrix`` with alpha 0) before packing, so the profile
 stores the rectified intrinsics and the camera-to-ego extrinsics, read from the
 ``camera`` table of one log database the same way
-``data_parsing/nuplan/packing.py`` reads them. A world rendered for the plugin
-must render these rectified pinhole cameras.
+``data_parsing/nuplan/packing.py`` reads them, but without nuplan-devkit. A
+world rendered for the plugin must render these rectified pinhole cameras.
 
 Usage (needs OpenCV):
     python Model/plugins/alpasim_driver/tools/export_nuplan_calibration.py \
@@ -14,7 +14,10 @@ Usage (needs OpenCV):
 """
 
 import argparse
+import importlib
+import io
 import json
+import pickle
 import re
 import sqlite3
 import sys
@@ -28,9 +31,37 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 from data_parsing.camera_slots import CANONICAL_SIX_CAMERA_SLOTS  # noqa: E402
 from data_parsing.nuplan.packing import (  # noqa: E402
     NUPLAN_CAMERA_CHANNELS,
-    _decode_pickle_vector,
     _quaternion_transform,
 )
+
+
+class _NuplanValue(list):
+    """Stands in for the list-like ``nuplan.database.common.data_types`` classes."""
+
+    def __setstate__(self, state: object) -> None:
+        self.state = state
+
+
+class _CalibrationUnpickler(pickle.Unpickler):
+    """Unpickles calibration fields without nuplan-devkit, allowing only known types."""
+
+    _NUMPY = {"scalar", "dtype", "_reconstruct", "ndarray"}
+
+    def find_class(self, module: str, name: str) -> type:
+        if module == "nuplan.database.common.data_types":
+            return type(name, (_NuplanValue,), {})
+        if module in ("numpy", "numpy.core.multiarray", "numpy._core.multiarray") and name in self._NUMPY:
+            source = "numpy._core.multiarray" if name in ("scalar", "_reconstruct") else "numpy"
+            return getattr(importlib.import_module(source), name)
+        raise pickle.UnpicklingError(f"unexpected type {module}.{name} in nuPlan calibration")
+
+
+def _decode(value: object, shape: tuple[int, ...], name: str) -> np.ndarray:
+    decoded = _CalibrationUnpickler(io.BytesIO(value)).load() if isinstance(value, bytes) else value
+    array = np.asarray(decoded, dtype=np.float64)
+    if array.shape != shape or not np.isfinite(array).all():
+        raise ValueError(f"nuPlan {name} has an invalid shape or value")
+    return array
 
 
 def main() -> None:
@@ -55,18 +86,14 @@ def main() -> None:
     for channel, slot in zip(NUPLAN_CAMERA_CHANNELS, CANONICAL_SIX_CAMERA_SLOTS):
         row = rows[channel]
         width, height = int(row["width"]), int(row["height"])
-        intrinsic = _decode_pickle_vector(
-            row["intrinsic"], expected_shape=(3, 3), name=f"{channel} intrinsic"
-        )
-        distortion = _decode_pickle_vector(
-            row["distortion"], expected_shape=(5,), name=f"{channel} distortion"
-        )
+        intrinsic = _decode(row["intrinsic"], (3, 3), f"{channel} intrinsic")
+        distortion = _decode(row["distortion"], (5,), f"{channel} distortion")
         rectified, _ = cv2.getOptimalNewCameraMatrix(
             intrinsic, distortion, (width, height), 0.0, (width, height)
         )
         camera_to_ego = _quaternion_transform(
-            _decode_pickle_vector(row["translation"], expected_shape=(3,), name="translation"),
-            _decode_pickle_vector(row["rotation"], expected_shape=(4,), name="rotation"),
+            _decode(row["translation"], (3,), f"{channel} translation"),
+            _decode(row["rotation"], (4,), f"{channel} rotation"),
         )
         cameras.append(
             {

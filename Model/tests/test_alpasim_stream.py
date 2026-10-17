@@ -68,6 +68,15 @@ KIT_CAMERAS = [
     "camera_ring_rear_right",
 ]
 KIT_SLOTS = ["front", "front_left", "front_right", "rear_left", "rear", "rear_right"]
+NUPLAN_CAMERAS = ["CAM_F0", "CAM_L0", "CAM_R0", "CAM_L2", "CAM_B0", "CAM_R2"]
+NUPLAN_NUREC_CAMERAS = [
+    "camera_front_wide_120fov",
+    "camera_cross_left_120fov",
+    "camera_cross_right_120fov",
+    "camera_rear_left_70fov",
+    "camera_front_tele_30fov",
+    "camera_rear_right_70fov",
+]
 T0_US = 10_000_000
 
 
@@ -430,19 +439,46 @@ def test_predict_integrates_controls_like_training(driver: AutoE2EDriver) -> Non
     assert np.allclose(yaw, headings[0].numpy(), atol=1e-4)
 
 
-def test_driver_config_fits_the_alpasim_schemas() -> None:
+@pytest.mark.parametrize(
+    ("driver_name", "runtime_name", "cameras"),
+    [
+        ("autoe2e", "autoe2e_configs", KIT_CAMERAS),
+        ("autoe2e_nuplan", "autoe2e_nuplan_configs", NUPLAN_NUREC_CAMERAS),
+    ],
+)
+def test_driver_config_fits_the_alpasim_schemas(
+    driver_name: str, runtime_name: str, cameras: list[str]
+) -> None:
     configs = _PLUGIN_DIR / "alpasim_autoe2e" / "configs" / "driver"
-    driver_cfg = yaml.safe_load((configs / "autoe2e.yaml").read_text())
-    runtime_cfg = yaml.safe_load((configs / "autoe2e_configs.yaml").read_text())
+    base_cfg = yaml.safe_load((configs / "autoe2e.yaml").read_text())
+    driver_cfg = yaml.safe_load((configs / f"{driver_name}.yaml").read_text())
+    runtime_cfg = yaml.safe_load((configs / f"{runtime_name}.yaml").read_text())
     model_fields = {field.name for field in dataclasses.fields(ModelConfig)}
-    assert set(driver_cfg["model"]) <= model_fields
-    assert driver_cfg["inference"]["context_length"] == CONTEXT_FRAMES
-    assert sorted(driver_cfg["inference"]["use_cameras"]) == sorted(KIT_CAMERAS)
+    assert set(base_cfg["model"]) <= model_fields
+    assert base_cfg["inference"]["context_length"] == CONTEXT_FRAMES
+    assert sorted(driver_cfg["inference"]["use_cameras"]) == sorted(cameras)
+    find_rig_profile(driver_cfg["inference"]["use_cameras"])
     simulation = runtime_cfg["runtime"]["simulation_config"]
+    assert sorted(camera["logical_id"] for camera in simulation["cameras"]) == sorted(cameras)
     for camera in simulation["cameras"]:
-        spacing = camera["frame_interval_us"] * driver_cfg["inference"]["subsample_factor"]
+        spacing = camera["frame_interval_us"] * base_cfg["inference"]["subsample_factor"]
         assert spacing == 500_000
     assert simulation["force_gt_duration_us"] >= 7_000_000
+
+
+def test_nuplan_extra_cameras_match_the_profile() -> None:
+    """The rendered nuPlan rig must be the calibration the plugin projects with."""
+    sys.path.insert(0, str(_PLUGIN_DIR / "tools"))
+    from profile_to_extra_cameras import extra_cameras, renamed
+
+    nuplan = json.loads((CALIBRATION_DIR / "nuplan.json").read_text())
+    nurec = json.loads((CALIBRATION_DIR / "nuplan_nurec.json").read_text())
+    assert nurec == renamed(nuplan, dict(zip(NUPLAN_CAMERAS, NUPLAN_NUREC_CAMERAS)))
+    runtime_cfg = yaml.safe_load(
+        (_PLUGIN_DIR / "alpasim_autoe2e" / "configs" / "driver" / "autoe2e_nuplan_configs.yaml").read_text()
+    )
+    assert runtime_cfg["runtime"]["extra_cameras"] == extra_cameras(nurec)
+    assert find_rig_profile(NUPLAN_NUREC_CAMERAS).name == "nuplan_nurec"
 
 
 # --- integration --------------------------------------------------------------
@@ -464,10 +500,13 @@ def test_untrained_release_model_predicts() -> None:
 
 @pytest.mark.integration
 @pytest.mark.skipif("AUTOE2E_CHECKPOINT" not in os.environ, reason="needs AUTOE2E_CHECKPOINT")
-def test_checkpoint_predicts() -> None:
+@pytest.mark.parametrize(
+    "cameras", [KIT_CAMERAS, NUPLAN_CAMERAS, NUPLAN_NUREC_CAMERAS], ids=["kit_scenes", "nuplan", "nuplan_nurec"]
+)
+def test_checkpoint_predicts(cameras: list[str]) -> None:
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    driver = AutoE2EDriver(os.environ["AUTOE2E_CHECKPOINT"], KIT_CAMERAS, device=device)
-    prediction = driver.predict(_prediction_input())
+    driver = AutoE2EDriver(os.environ["AUTOE2E_CHECKPOINT"], cameras, device=device)
+    prediction = driver.predict(_prediction_input(cameras=cameras))
     assert np.isfinite(prediction.selected_positions).all()
 
 

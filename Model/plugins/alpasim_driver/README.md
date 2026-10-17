@@ -50,6 +50,8 @@ Against packed KITScenes v3.5 samples rebuilt from raw `poses.txt`, the projecti
 | `runtime.simulation_config.cameras` | native aspect ratio | The plugin squashes frames to square tiles, as in training. |
 | `services.driver.environments` | `AUTOE2E_MODEL_ROOT=/mnt/drivers/autoe2e/Model` | Where the driver container finds the AutoE2E model code. |
 
+`driver=autoe2e_nuplan` drives the nuPlan v1.1 rig, for example with the nuPlan Epoch 5 checkpoint, in NuRec scenes of the NVIDIA camera rig. AlpaSim's `runtime.extra_cameras` can only override cameras a scene already has. So the six nuPlan cameras are rendered as rectified pinhole cameras on six NVIDIA camera IDs, the way AlpaSim's Transfuser plugin renders its nuPlan-style rig, and `nuplan_nurec.json` maps them back. `nuplan.json` keeps the `CAM_*` names for worlds reconstructed from nuPlan. [`tools/profile_to_extra_cameras.py`](./tools/profile_to_extra_cameras.py) regenerates them from the profile, and a test keeps the two identical.
+
 `driver.model` may only hold keys of AlpaSim's `ModelConfig`; the driver rejects any other key at startup.
 
 ## Running in AlpaSim
