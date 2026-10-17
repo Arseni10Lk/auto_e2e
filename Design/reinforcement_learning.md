@@ -86,7 +86,7 @@ Because of this, we can rely directly on AlpaSim's built-in hooks to stream our 
 
 ## 5. AutoE2E AlpaSim Plugin
 
-The AlpaSim driver plugin lives in `Model/plugins/alpasim_driver/` and registers itself through the `alpasim.models` and `alpasim.configs` entry points. *(Status: the plugin runs the released reactive BEVFormer T8 checkpoints. Its inputs are verified against packed KITScenes samples, but it has not yet completed a closed-loop run in AlpaSim.)*
+The AlpaSim driver plugin lives in `Model/plugins/alpasim_driver/` and registers itself through the `alpasim.models` and `alpasim.configs` entry points. *(Status: the plugin runs the released reactive BEVFormer T8 checkpoints. Its inputs are verified against packed KITScenes samples. It has completed a short closed-loop rollout in AlpaSim: the nuPlan rig on a NuRec sample scene, three decisions on a laptop. Longer closed-loop runs and KITScenes worlds are pending.)*
 
 ### 5.1 Architecture & Components
 

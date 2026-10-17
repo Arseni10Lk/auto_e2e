@@ -72,11 +72,15 @@ cp -r Model/plugins/alpasim_driver "$ALPASIM_ROOT/plugins/"
 Next, add `autoe2e = ["alpasim_autoe2e"]` to the plugin extras in `$ALPASIM_ROOT/pyproject.toml`, and `--extra autoe2e` to the `uv sync` line of its `Dockerfile`. Then build the image and run:
 
 ```bash
-uv run --project "$ALPASIM_ROOT/src/wizard" alpasim_wizard \
-    deploy=local topology=1gpu driver=autoe2e \
+cd "$ALPASIM_ROOT" && uv run --project src/wizard alpasim_wizard \
+    deploy=local topology=1gpu driver=autoe2e_nuplan \
     driver.model.checkpoint_path=/mnt/drivers/autoe2e/checkpoint.pt \
-    wizard.log_dir=$PWD/outputs/autoe2e_closed_loop_run
+    defines.base_image=alpasim-base:latest \
+    wizard.log_dir=$PWD/outputs/autoe2e_closed_loop_run \
+    "hydra.searchpath=[file://$ALPASIM_ROOT/plugins/alpasim_driver/alpasim_autoe2e/configs]"
 ```
+
+The wizard runs on the host, where the plugin is not installed, so `hydra.searchpath` points it at the plugin's configs; the driver itself runs inside the image.
 
 Before a full run, check the driver inside its container with [`examples/smoke_test_alpasim.py`](./examples/smoke_test_alpasim.py). It runs one prediction on synthetic frames and poses.
 
@@ -84,7 +88,9 @@ The scene must render the rig's cameras. For KITScenes, that means a reconstruct
 
 ## Performance
 
-One prediction recomputes the BEV of all eight frames. On a laptop RTX 4050 that takes about 23 s per step, almost all of it in the BEVFormer view fusion; parsing takes 0.15 s. The closed loop waits for the driver, so it still runs, only slowly.
+One prediction recomputes the BEV of all eight frames. On a laptop RTX 4050 that takes about 23 s per step, almost all of it in the BEVFormer view fusion; parsing takes 0.15 s. The model peaks at 2.1 GB of GPU memory. On CPU it takes about 10 minutes per step and 3.7 GB of RAM. The closed loop waits for the driver, so it still runs, only slowly.
+
+The renderer and the driver share the GPU under `topology=1gpu`. On a 6 GB GPU the NuRec renderer leaves too little room for the model, so `driver.model.device=cpu` is needed there. With it, `driver=autoe2e_nuplan` and the nuPlan Epoch 5 checkpoint completed a closed-loop rollout of the AlpaSim sample scene `clipgt-01d503d4`. After the 7 s warm-up, AutoE2E made three decisions, and the rollout had no collision or off-road event.
 
 ## Tests
 
