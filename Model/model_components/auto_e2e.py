@@ -3,7 +3,7 @@ from typing import Any, Dict, Optional
 import torch
 import torch.nn as nn
 
-from .reactive_e2e import ReactiveE2E
+from .reactive_e2e import ReactiveE2E, StatefulCameraFPNCache
 from .world_action_model import RollingHistoryBuffer, WorldActionModel
 
 # Egomotion history is 64 timesteps x [speed, acceleration, yaw_rate, curvature]
@@ -74,12 +74,17 @@ class AutoE2E(nn.Module):
                  visual_history_dim=896,
                  map_type="rasterized", map_context_channels=3,
                  route_channels=2, enable_route_conditioning=True,
+                 route_encoder_hidden_channels=96,
                  map_fusion_mode="residual", map_fusion_kwargs=None,
                  temporal_memory_mode="no_memory", temporal_memory_kwargs=None,
                  planner_mode="bezier", planner_kwargs=None,
                  enable_world_model=False, world_model_kwargs=None,
                  enable_reasoning=False, reasoning_mode="none",
-                 reasoning_kwargs: Optional[Dict[str, Any]] = None):
+                 reasoning_kwargs: Optional[Dict[str, Any]] = None,
+                 enable_bev_segmentation=False,
+                 bev_segmentation_classes=8,
+                 enable_route_reconstruction=False,
+                 auxiliary_output_size=None):
         super(AutoE2E, self).__init__()
 
         # Reactive model which runs at 10Hz and processes multi-camera inputs
@@ -100,11 +105,16 @@ class AutoE2E(nn.Module):
                  map_context_channels=map_context_channels,
                  route_channels=route_channels,
                  enable_route_conditioning=enable_route_conditioning,
+                 route_encoder_hidden_channels=route_encoder_hidden_channels,
                  map_fusion_mode=map_fusion_mode, map_fusion_kwargs=map_fusion_kwargs,
                  temporal_memory_mode=temporal_memory_mode, temporal_memory_kwargs=temporal_memory_kwargs,
                  planner_mode=planner_mode, planner_kwargs=planner_kwargs,
                  enable_reasoning=enable_reasoning, reasoning_mode=reasoning_mode,
-                 reasoning_kwargs=reasoning_kwargs)
+                 reasoning_kwargs=reasoning_kwargs,
+                 enable_bev_segmentation=enable_bev_segmentation,
+                 bev_segmentation_classes=bev_segmentation_classes,
+                 enable_route_reconstruction=enable_route_reconstruction,
+                 auxiliary_output_size=auxiliary_output_size)
         self.enable_reasoning = enable_reasoning
 
         # World Action Model (slow, ~1Hz): encodes the multi-camera history into
@@ -159,13 +169,33 @@ class AutoE2E(nn.Module):
             self.visual_history_buffer = RollingHistoryBuffer(
                 history_len=self.visual_history_buffer.history_len)
 
+    def create_stateful_camera_fpn_cache(
+        self,
+    ) -> StatefulCameraFPNCache:
+        """Create an inference cache for one BEVFormer T8 camera stream."""
+        return self.Reactive_E2E.create_stateful_camera_fpn_cache()
 
     def forward(self, camera_tiles, map_context, visual_history,
                 egomotion_history, route_mask=None, map_valid=None,
                 route_valid=None,
                 projection=None, geometry_type=None, image_transform=None,
+                camera_history_tiles=None, history_projections=None,
+                camera_fpn_cache=None,
+                camera_fpn_stream_ids=None,
+                camera_fpn_timestamps_us=None,
+                front_camera_tile=None, front_camera_fpn_tile=None,
+                front_camera_fpn_available=None,
+                front_projection=None,
+                front_image_transform=None,
                 mode="train", trajectory_target=None,
-                history_frames=None, future_frames=None, **kwargs):
+                history_frames=None, future_frames=None,
+                return_auxiliary=False,
+                precomputed_image_bev=None,
+                return_image_bev=False,
+                compute_bev_segmentation=True,
+                compute_route_reconstruction=True,
+                bev_only=False,
+                **kwargs):
         """
         Run the full autonomous-driving pipeline.
 
@@ -195,6 +225,22 @@ class AutoE2E(nn.Module):
             geometry_type: Optional explicit geometry label ("pinhole",
                 "rectified_pinhole", "ftheta", "pseudo") passed to BEV fusion.
             image_transform: Optional ImageTransform for the model-input frame.
+            front_camera_tile: Optional native-resolution front image tensor.
+            front_camera_fpn_tile: Optional base-resolution Front image packed
+                identically to historical Front frames for cache insertion.
+            front_camera_fpn_available: Per-sample validity for the exact
+                base-resolution Front companion.
+            front_projection: Optional one-view projection for the native front.
+            camera_history_tiles: Optional seven-frame camera history for T8.
+            history_projections: Optional current-ego-aligned history geometry.
+            camera_fpn_cache: Optional per-stream stateful T8 FPN cache.
+            camera_fpn_stream_ids: Ordered scene or stream identity per sample.
+            camera_fpn_timestamps_us: Source timestamps sampled exactly every
+                500 ms. Do not synthesize continuity across dropped frames.
+            precomputed_image_bev: Optional detached image BEV from an earlier
+                inference pass over the same camera inputs.
+            return_image_bev: Return the detached image BEV for route-only
+                counterfactual inference.
             mode: "train" also returns aux branch outputs for their losses.
 
         Returns:
@@ -290,11 +336,29 @@ class AutoE2E(nn.Module):
             route_valid=route_valid,
             projection=projection, geometry_type=geometry_type,
             image_transform=image_transform,
-            mode=mode, trajectory_target=trajectory_target, **kwargs,
+            camera_history_tiles=camera_history_tiles,
+            history_projections=history_projections,
+            camera_fpn_cache=camera_fpn_cache,
+            camera_fpn_stream_ids=camera_fpn_stream_ids,
+            camera_fpn_timestamps_us=camera_fpn_timestamps_us,
+            front_camera_tile=front_camera_tile,
+            front_camera_fpn_tile=front_camera_fpn_tile,
+            front_camera_fpn_available=front_camera_fpn_available,
+            front_projection=front_projection,
+            front_image_transform=front_image_transform,
+            mode=mode,
+            return_auxiliary=return_auxiliary,
+            precomputed_image_bev=precomputed_image_bev,
+            return_image_bev=return_image_bev,
+            compute_bev_segmentation=compute_bev_segmentation,
+            compute_route_reconstruction=compute_route_reconstruction,
+            bev_only=bev_only,
+            trajectory_target=trajectory_target,
+            **kwargs,
         )
-        reasoning_pred = None
-        if self.enable_reasoning and mode == "train":
-            trajectory, reasoning_pred = reactive_out
+        reactive_aux = {}
+        if isinstance(reactive_out, tuple):
+            trajectory, reactive_aux = reactive_out
         else:
             trajectory = reactive_out
 
@@ -302,14 +366,13 @@ class AutoE2E(nn.Module):
         # keeps its future_frames alongside the prediction so the training loop
         # can call jepa_loss(future_state_pred, future_frames) without re-plumbing
         # the frames itself.
-        if mode == "train" and (
-            self.World_Action_Model_E2E is not None or reasoning_pred is not None
-        ):
-            aux_outputs = {
+        if mode == "train" and self.World_Action_Model_E2E is not None:
+            reactive_aux.update({
                 "future_state_pred": future_state_pred,
                 "future_frames": future_frames,
-                "reasoning_pred": reasoning_pred,
-            }
+            })
+        if reactive_aux:
+            aux_outputs = reactive_aux
             return trajectory, aux_outputs
         return trajectory
         

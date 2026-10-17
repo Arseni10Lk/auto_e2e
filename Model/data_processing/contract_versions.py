@@ -21,6 +21,10 @@ ever enters a cached task's input signature.
 Source revision (HF commit), teacher model revision, and the prompt body hash are
 NOT constants here — they are resolved at run time (from HF / teacher config /
 prompt text) and threaded through as inputs; see DatasetSnapshot (§3.4a).
+
+nuPlan BEV class semantics are versioned separately by
+`BEV_SEGMENTATION_TAXONOMY_VERSION` and the nuPlan pack task cache. A semantic
+target change must bump both without changing the stable NPZ encoding version.
 """
 
 from __future__ import annotations
@@ -52,14 +56,36 @@ PARSER_VERSION = "v3"
 # field derived from the semantic drivable-area channel.
 # v8: route_supervision.npz explicitly stores drivable-field availability so
 # training never infers supervision validity from distance values.
-SHARD_SCHEMA_VERSION = "v8"
+# v9: adds deterministic trajectory_xy.npz, optional bev_segmentation.npz, and
+# the sample_navigation_v3 semantic Map/Route members used by Reactive stages.
+# v10: standardizes six 512px camera encodings, stores native 1024px CAM_F0,
+# adds bev_hist_<t>_cam_<v>.jpg for seven history frames, and extends calib.json
+# with front_projection, history_projection, temporal_frame_offsets,
+# temporal_frame_interval_us, and front_camera_*. Rig-constant projection and
+# provenance live once in manifest.json/rig/projection.json.
+# v11: adds the base-resolution Front companion used by the stateful FPN cache.
+# v12: KITScenes stores an exact 0.5-second T8 history pool index and per-sample
+# current-ego-aligned historical camera projection matrices.
+# v13: KITScenes adds pose-space trajectory targets, native 1024px current Front
+# images with a 512px FPN companion, an immutable frame-pool archive, and
+# complete Reactive manifest provenance.
+SHARD_SCHEMA_VERSION = "v13"
 
 # Calibration / projection spec encoding and raster-map coordinate semantics.
 # v2 queries KITScenes maps in the scene-local pose frame and applies the map
 # origin exactly once when publishing absolute geographic coordinates.
 # v3 aligns the semantic navigation raster and camera BEV to the audited
 # one-meter geometry with the existing rear-third ego anchor.
-GEOMETRY_VERSION = "v3"
+# v4 adds the shared Reactive geometry: 450 x 300 cells at 0.4 m/px with the
+# exact camera-BEV pc_range, used by nuPlan and L2D target artifacts.
+# v5 replaces L2D pseudo geometry with pinned RDF extrinsics and FOV-derived
+# pinhole intrinsics, and standardizes six-camera semantic slot ordering.
+# v6 derives one square-pixel source focal length from L2D's vertical FOV,
+# then applies the source-to-packed resize instead of fitting incompatible
+# vendor horizontal and vertical angular extents independently.
+# v7 moves KITScenes navigation rasters onto the shared 450x300 AutoE2E grid and
+# records native-Front projection matrices alongside the 512px surround rig.
+GEOMETRY_VERSION = "v7"
 
 # Selection policy for the sparse reasoning-label subset. v2 adds the first
 # valid sample of every split group to the regular frame-index grid so even a

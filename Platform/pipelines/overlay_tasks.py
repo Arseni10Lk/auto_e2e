@@ -47,13 +47,23 @@ def _large_shm_pod_template():
         V1Container,
         V1EmptyDirVolumeSource,
         V1PodSpec,
+        V1Toleration,
         V1Volume,
         V1VolumeMount,
     )
 
     return PodTemplate(
+        annotations={"karpenter.sh/do-not-disrupt": "true"},
         primary_container_name="primary",
         pod_spec=V1PodSpec(
+            node_selector={"workload-type": "gpu-validation"},
+            tolerations=[
+                V1Toleration(
+                    key="nvidia.com/gpu",
+                    operator="Exists",
+                    effect="NoSchedule",
+                ),
+            ],
             containers=[
                 V1Container(
                     name="primary",
@@ -1496,6 +1506,10 @@ def prepare_overlay_set(
     cache_version=OVERLAY_CACHE_VERSION,
     cache_serialize=True,
     pod_template=_large_shm_pod_template(),
+    labels={
+        "kueue.x-k8s.io/queue-name": "gpu-validation",
+        "kueue.x-k8s.io/priority-class": "research-low",
+    },
 )
 def precompute_overlay_partition(
     checkpoint: FlyteFile,
@@ -1636,6 +1650,7 @@ def precompute_overlay_partition(
     output_dir = Path(tempfile.mkdtemp(prefix="overlay-partition-"))
     entries = []
     seen_shards = set()
+    from data_parsing.pre_extracted import packed_sample_tar_paths
 
     for shard_dir in shard_dirs:
         remove_local_dir = bool(
@@ -1643,7 +1658,7 @@ def precompute_overlay_partition(
         )
         local_dir = Path(shard_dir.download()).resolve()
         try:
-            tarfiles = sorted(local_dir.glob("*.tar"))
+            tarfiles = packed_sample_tar_paths(local_dir)
             if not tarfiles:
                 _validate_empty_overlay_partition(str(local_dir))
                 print(

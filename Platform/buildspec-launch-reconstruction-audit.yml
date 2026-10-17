@@ -17,8 +17,8 @@ env:
     ARTIFACT_SET_SHA256: ""
     AUDIT_CODE_REVISION: ""
     RECOVERY_MANIFEST_URI: ""
-    DATASET_VERSION: v3.3
-    IMAGE_SIZE: "256"
+    DATASET_VERSION: v3.5
+    IMAGE_SIZE: "512"
     PACK_CONCURRENCY: "60"
     MAX_PARTITIONS: "10"
     VAL_FRACTION: "0.1"
@@ -28,7 +28,7 @@ env:
 phases:
   install:
     commands:
-      - pip install -q flytekit==1.14.9 numpy torch kubernetes --extra-index-url https://download.pytorch.org/whl/cpu
+      - pip install -q flytekit==1.16.24 numpy torch kubernetes --extra-index-url https://download.pytorch.org/whl/cpu
   build:
     commands:
       - ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)

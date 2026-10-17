@@ -100,6 +100,19 @@ def test_all_split_keeps_everything():
         assert keep_zero(s) is True
 
 
+@pytest.mark.parametrize(
+    ("split", "val_fraction"),
+    (("all", 0.2), ("train", 0.0), ("train", 0.2), ("val", 0.2)),
+)
+def test_hash_split_filters_are_picklable(split, val_fraction):
+    keep = _split_keep(split, val_fraction)
+    restored = pickle.loads(pickle.dumps(keep))
+
+    for episode in range(20):
+        sample = _sample(episode, 0)
+        assert restored(sample) is keep(sample)
+
+
 def test_legacy_shard_without_split_group_falls_back_to_key():
     """A shard whose meta.json predates split_group_uid still splits (by __key__),
     so old shards don't crash the loader."""
@@ -224,3 +237,21 @@ def test_discover_split_group_uids_scans_packed_metadata(tmp_path):
     assert sample_digest == hashlib.sha256(
         b"partition-a-sample-1\npartition-b-sample-0"
     ).hexdigest()
+
+
+def test_discover_split_inventory_allows_single_partition_group_explicitly(
+    tmp_path,
+):
+    partition = tmp_path / "partition"
+    _write_group_metadata_tar(partition, ["kitscenes-scene-a"])
+
+    with pytest.raises(ValueError, match="at least two"):
+        discover_split_inventory([partition])
+
+    inventory = discover_split_inventory(
+        [partition],
+        allow_single_group=True,
+    )
+
+    assert inventory.group_uids == ("kitscenes-scene-a",)
+    assert inventory.sample_count == 1

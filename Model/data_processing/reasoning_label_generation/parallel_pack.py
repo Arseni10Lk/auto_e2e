@@ -34,6 +34,7 @@ _RESIZE: Any = None
 _TO_PIL: Any = None
 _DATASET_VALUE: Any = None
 _CALIB_BYTES: Any = None
+_OSM_SNAPSHOT: Any = None
 
 
 def init_pack_worker(
@@ -43,13 +44,15 @@ def init_pack_worker(
     image_size: int,
     world_model: bool,
     calib_bytes: bytes,
+    osm_graph_snapshot_path: Optional[str] = None,
 ) -> None:
     """Build this process's raw dataset + resize transform once (reused per sample)."""
-    global _DS, _RESIZE, _TO_PIL, _DATASET_VALUE, _CALIB_BYTES
+    global _DS, _RESIZE, _TO_PIL, _DATASET_VALUE, _CALIB_BYTES, _OSM_SNAPSHOT
     from torchvision import transforms
 
     _DATASET_VALUE = dataset_value
     _CALIB_BYTES = calib_bytes
+    _OSM_SNAPSHOT = None
     _TO_PIL = transforms.ToPILImage()
     _RESIZE = transforms.Resize((image_size, image_size))
     if dataset_value == "nvidia/PhysicalAI-Autonomous-Vehicles":
@@ -79,14 +82,27 @@ def init_pack_worker(
         )
         _DS = L2DDataset(repo_id=dataset_value, episodes=l2d_episodes,
                          include_world_model_windows=world_model, root=raw_path)
+        if osm_graph_snapshot_path is not None:
+            from data_parsing.l2d import load_l2d_osm_graph_snapshot
+
+            _OSM_SNAPSHOT = load_l2d_osm_graph_snapshot(
+                osm_graph_snapshot_path
+            )
 
 
-def _jpeg(frame_tensor) -> bytes:
+def _jpeg(frame_tensor, output_size: int | None = None) -> bytes:
     """Resize a RAW (3,H,W) frame to a JPEG byte string (the single pack resize)."""
+    from torchvision import transforms
+
     t = frame_tensor.cpu()
     if t.dtype.is_floating_point:
         t = t.clamp(0, 1)
-    f = _RESIZE(_TO_PIL(t))
+    resize = (
+        _RESIZE
+        if output_size is None
+        else transforms.Resize((output_size, output_size))
+    )
+    f = resize(_TO_PIL(t))
     b = io.BytesIO()
     f.save(b, format="JPEG", quality=90)
     return b.getvalue()
@@ -97,6 +113,10 @@ def init_row_worker(
     episodes: Optional[List[int | str]],
     raw_path: str,
     image_size: int,
+    source_split: str,
+    source_revision: str,
+    benchmark_protocol: bool = False,
+    allow_mapless: bool = False,
 ) -> None:
     """Build this process's PLAIN-mode dataset for row-level decode (#121 decode-dedup).
 
@@ -126,11 +146,14 @@ def init_row_worker(
         scene_ids = [str(scene_id) for scene_id in episodes] if episodes else None
         _DS = KitScenesDataset(
             data_root=raw_path,
-            split="train",
+            split=source_split,
             scene_ids=scene_ids,
             image_size=image_size,
             include_world_model_windows=False,
             include_navigation=False,
+            source_revision=source_revision,
+            benchmark_protocol=benchmark_protocol,
+            allow_mapless=allow_mapless,
         )
     else:
         from data_parsing.l2d import L2DDataset
@@ -139,8 +162,13 @@ def init_row_worker(
             if episodes is not None
             else None
         )
-        _DS = L2DDataset(repo_id=dataset_value, episodes=l2d_episodes,
-                         include_world_model_windows=False, root=raw_path)
+        _DS = L2DDataset(
+            repo_id=dataset_value,
+            revision=source_revision,
+            episodes=l2d_episodes,
+            include_world_model_windows=False,
+            root=raw_path,
+        )
 
 
 def decode_row(
@@ -174,6 +202,11 @@ def decode_row(
         raise ValueError(f"decode_row expects 2 or 3 values, got {task!r}")
 
     if _DATASET_VALUE == "KIT-MRT/KITScenes-Multimodal":
+        from reactive_training_contracts import (
+            REACTIVE_FRONT_CAMERA_IMAGE_SIZE,
+            REACTIVE_FRONT_CAMERA_INDEX,
+        )
+
         scene_id = str(group_id)
         visual = _DS._load_multiview_frame(scene_id, frame_index)
         kitscenes_cams = {
@@ -183,7 +216,25 @@ def decode_row(
             ): _jpeg(visual[view])
             for view in range(visual.shape[0])
         }
-        return (scene_id, frame_index), kitscenes_cams, None
+        extras = None
+        if include_map:
+            front_frame_id = (
+                f"kitscenes-{UID_SCHEMA_VERSION}-{scene_id}-"
+                f"r{frame_index:06d}-c{REACTIVE_FRONT_CAMERA_INDEX}"
+            )
+            native_front = _DS.front_camera_for_row(
+                scene_id,
+                frame_index,
+                image_size=REACTIVE_FRONT_CAMERA_IMAGE_SIZE,
+            )
+            extras = {
+                "front_camera_native_jpeg": _jpeg(
+                    native_front,
+                    REACTIVE_FRONT_CAMERA_IMAGE_SIZE,
+                ),
+                "front_camera_fpn_jpeg": kitscenes_cams[front_frame_id],
+            }
+        return (scene_id, frame_index), kitscenes_cams, extras
 
     from data_parsing.l2d.dataset import CAMERA_NAMES, MAP_VIEW_NAME
 
@@ -246,6 +297,16 @@ def pack_sample(si: int) -> Tuple[str, int, Dict[str, bytes], Dict[str, bytes]]:
     navigation_members = sample.get("navigation_members")
     if navigation_members is not None:
         members.update(navigation_members)
+    elif _DATASET_VALUE == "yaak-ai/L2D" and _OSM_SNAPSHOT is not None:
+        from data_parsing.l2d import l2d_reactive_navigation_members
+
+        members.update(
+            l2d_reactive_navigation_members(
+                _OSM_SNAPSHOT,
+                sample["route_waypoints_lon_lat"],
+                sample["pose_current"],
+            )
+        )
     else:
         map_tile = sample.get("map_tile")
         if map_tile is not None and float(map_tile.abs().max()) > 0:
@@ -277,6 +338,45 @@ def pack_sample(si: int) -> Tuple[str, int, Dict[str, bytes], Dict[str, bytes]]:
     members["ego.npy"] = ego_data.tobytes()
     from data_processing.geospatial import geospatial_members
     members.update(geospatial_members(sample))
+    from data_processing.reactive_training_artifacts import (
+        BEV_SEGMENTATION_MEMBER,
+        TRAJECTORY_XY_MEMBER,
+        encode_bev_segmentation,
+        encode_trajectory_xy,
+        wgs84_future_to_ego_xy,
+    )
+
+    trajectory_xy = sample.get("trajectory_xy_m")
+    trajectory_valid = sample.get("trajectory_valid")
+    if trajectory_xy is not None and trajectory_valid is not None:
+        members[TRAJECTORY_XY_MEMBER] = encode_trajectory_xy(
+            trajectory_xy,
+            trajectory_valid,
+        )
+    elif _OSM_SNAPSHOT is not None:
+        pose = sample.get("pose_current")
+        gps_future = sample.get("gps_future")
+        if pose is not None and gps_future is not None:
+            trajectory_xy, trajectory_valid = wgs84_future_to_ego_xy(
+                gps_future,
+                current_latitude_deg=float(pose["latitude_deg"]),
+                current_longitude_deg=float(pose["longitude_deg"]),
+                heading_deg_cw_from_north=float(
+                    pose["heading_deg_cw_from_north"]
+                ),
+            )
+            members[TRAJECTORY_XY_MEMBER] = encode_trajectory_xy(
+                trajectory_xy,
+                trajectory_valid,
+            )
+
+    bev_target = sample.get("bev_segmentation_target")
+    bev_valid = sample.get("bev_segmentation_valid")
+    if bev_target is not None and bev_valid is not None:
+        members[BEV_SEGMENTATION_MEMBER] = encode_bev_segmentation(
+            bev_target,
+            bev_valid,
+        )
     members["meta.json"] = json.dumps({
         "idx": si, "dataset": _DATASET_VALUE,
         "sample_uid": uid, "split_group_uid": split_group,
