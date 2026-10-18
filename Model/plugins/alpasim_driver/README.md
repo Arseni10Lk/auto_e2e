@@ -105,7 +105,7 @@ python -m pytest tests/test_alpasim_stream.py -m integration                    
 
 ## Rewards
 
-[`rewards.py`](./alpasim_autoe2e/rewards.py) holds the phase-1 reward agreed in #123 and #177: `GroundTruthDeviationReward`.
+[`rewards.py`](./alpasim_autoe2e/rewards.py) holds the phase-1 reward agreed in [#123](https://github.com/autowarefoundation/auto_e2e/issues/123) and [#177](https://github.com/autowarefoundation/auto_e2e/pull/177): `GroundTruthDeviationReward`.
 
 - **Tracking term:** for each AutoE2E decision, `-(w_ade·ADE + w_fde·FDE)` between the plan and the recorded drive at the same timestamps.
 - **Renderer validity bound:** once the ego itself is more than 3 m from the recording, a −10 penalty is added and `truncated` is set. The reconstruction is only reliable near the recorded path, so this bound does not share the tracking weight.

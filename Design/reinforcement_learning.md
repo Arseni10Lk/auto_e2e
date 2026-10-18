@@ -6,13 +6,13 @@
 |-------|-------|
 | Status | Plugin and phase-1 reward implemented; RL loop and later phases proposed |
 | Authors | Arseni10Lk |
-| Date | 2026-08-06 (last updated 2026-10-18) |
+| Date | 2026-08-06 (updated: 2026-10-18) |
 | Related Issues | [#140](https://github.com/autowarefoundation/auto_e2e/issues/140), [#123](https://github.com/autowarefoundation/auto_e2e/issues/123) |
 | Related PRs | [#177](https://github.com/autowarefoundation/auto_e2e/pull/177) |
 
 ## 1. Executive Summary
 
-This document outlines the architecture for the **Stage-3 Closed-Loop Reinforcement Learning** pipeline of the AutoE2E policy model. It details the integration of the policy with the **AlpaSim** microservices simulation engine, with the **KITScenes** and **nuPlan** camera rigs and **NuRec (3D Gaussian Splatting)** as the world renderer. The first reward, already implemented, is the deviation from the recorded drive, bounded by the region where the reconstruction is reliable. As future work, the document proposes a dual-backend **SimAdapter** (latent vs. pixel rollouts) and a **RewardRegistry** with a multi-objective, faithfulness-gated reward against reward hacking. It closes with a domain-specific evaluation suite featuring service manoeuvres and counterfactual synthesis.
+This document outlines the architecture for the **Stage-3 Closed-Loop Reinforcement Learning** pipeline of the AutoE2E policy model. It details the integration of the policy with the **AlpaSim** microservices simulation engine, with the **KITScenes** and **nuPlan** camera rigs and the world renderer (default: **NuRec (3D Gaussian Splatting)**). The first reward, already implemented, is the deviation from the recorded drive, bounded by the region where the reconstruction is reliable. As future work, the document proposes a dual-backend **SimAdapter** (latent vs. pixel rollouts) and a **RewardRegistry** with a multi-objective, faithfulness-gated reward against reward hacking. It closes with a domain-specific evaluation suite featuring service manoeuvres and counterfactual synthesis.
 
 ## 2. Motivation and problem statement
 
@@ -94,7 +94,7 @@ Because of this, we can rely directly on AlpaSim's built-in hooks to stream our 
 
 ## 5. AutoE2E AlpaSim Plugin
 
-The AlpaSim driver plugin lives in `Model/plugins/alpasim_driver/` and registers itself through the `alpasim.models` and `alpasim.configs` entry points. *(Status: the plugin runs the released reactive BEVFormer T8 checkpoints. Its inputs are verified against packed KITScenes samples. It has completed a short closed-loop rollout in AlpaSim: the nuPlan rig on a NuRec sample scene, three decisions on a laptop. Longer closed-loop runs and KITScenes worlds are pending.)*
+The AlpaSim driver plugin lives in `Model/plugins/alpasim_driver/` and registers itself through the `alpasim.models` and `alpasim.configs` entry points.
 
 ### 5.1 Architecture & Components
 
@@ -120,17 +120,15 @@ The AlpaSim driver plugin lives in `Model/plugins/alpasim_driver/` and registers
 
 ### 5.3 Current Limitations
 
-- **Inference cost:** one decision recomputes the bird's-eye-view features of all eight frames. That takes about 23 s on a laptop RTX 4050 and about 10 min on CPU; datacenter GPUs are not yet measured. A closed loop at 10 Hz therefore runs far slower than real time.
-- **GPU memory:** the model peaks at 2.1 GB. On a 6 GB GPU it does not fit next to the NuRec renderer, and the first rollout ran the model on CPU. A cluster without Docker or enroot can still host the driver alone, with AlpaSim's `driver_source=external_static` and the renderer on another machine.
 - **No map or route:** AlpaSim's model API passes neither to the driver, so the model runs camera-only.
 - **Rendering domain gap:** AutoE2E was trained on real images. NuRec renders show artifacts for viewpoints away from the recording cameras, for example the nuPlan rig in an NVIDIA scene, and on dynamic vehicles.
 - **Worlds:** KITScenes and nuPlan reconstructions do not exist yet (§3).
 
 ## 6. Reward Design
 
-### 6.1 Phase 1 (Implemented; RL-Loop Wiring Pending): Deviation from the Recorded Drive
+### 6.1 Phase 1: Deviation from the Recorded Drive
 
-As agreed in [#123](https://github.com/autowarefoundation/auto_e2e/issues/123) and [#177](https://github.com/autowarefoundation/auto_e2e/pull/177), closed-loop RL starts from the imitation objective turned into a reward. This gives a simple, well-understood baseline to grow more nuanced terms from (§6.2). Two physical constraints also favour starting here:
+As agreed during one of the working group meetings (more information in [#123](https://github.com/autowarefoundation/auto_e2e/issues/123) and [#177](https://github.com/autowarefoundation/auto_e2e/pull/177)), closed-loop RL starts from the imitation objective turned into a reward. This gives a simple, well-understood baseline. Two physical constraints also favor starting here:
 1. **Raw Sensor Stream Availability:** Real-world datasets (such as KITScenes) provide high-resolution camera streams and Lanelet2 HD maps, but do not provide ground-truth 3D bounding box annotations for all dynamic agents at runtime.
 2. **3DGS Novel View Degradation:** The NuRec environment is reconstructed from camera observations captured along the logged trajectory. Deviating beyond approximately 3.0 meters enters under-sampled regions of the 3D Gaussian Splatting representation, introducing visual ghosting artifacts that corrupt policy observation.
 
@@ -151,12 +149,12 @@ R = w_track * R_track + R_bound
 
 **Future work within Phase 1:**
 - **Wiring:** the reward returns `truncated`, but ending the episode is the RL environment's job. That environment, and the loop that collects rewards, do not exist yet (§7).
-- **Threshold provenance:** the 3 m bound comes from #140 (30 July) and #177 (14 August) and has not been measured. Rendering quality (PSNR/LPIPS) against lateral offset from the recorded path would ground it and show whether it must be per scene.
-- **Off-road term:** an off-road term against Lanelet2 drivable polygons was prototyped earlier in #177. It needs a map, which AlpaSim does not pass to the driver, and AlpaSim already reports an `offroad` metric. It moves to Phase 2's safety term.
+- **Threshold provenance:** the 3 m bound comes from [#140](https://github.com/autowarefoundation/auto_e2e/issues/140) and [#177](https://github.com/autowarefoundation/auto_e2e/pull/177) and has not been measured. Rendering quality (PSNR/LPIPS) against lateral offset from the recorded path would ground it and show whether it must be per scene.
+- **Off-road term:** an off-road term against Lanelet2 drivable polygons was prototyped earlier in [#177](https://github.com/autowarefoundation/auto_e2e/pull/177). It needs a map, which AlpaSim does not pass to the driver, and AlpaSim already reports an `offroad` metric. It moves to Phase 2's safety term.
 
 ### 6.2 Phase 2 (Future Work): Multi-Objective Reward Formulation
 
-Based on the [Issue #123](https://github.com/autowarefoundation/auto_e2e/issues/123) proposal for mature stage-3 closed-loop RL, once dynamic bounding box perception and counterfactual simulation modules are established, the reward function will expand to a non-redundant multi-objective registry. *Non-redundant* is the first design rule of #123: every term must carry information the policy cannot already infer from its own inputs. A term computed only from what the policy observes can re-weight its preferences but cannot change its ranking of actions. Candidate sources are the world model's predicted consequences of an action, spatial structure the planner discards (the unpooled BEV, #121), and external ground truth such as HD-map conflict geometry.
+Based on the [Issue #123](https://github.com/autowarefoundation/auto_e2e/issues/123) proposal for mature stage-3 closed-loop RL, once dynamic bounding box perception and counterfactual simulation modules are established, the reward function will expand to a non-redundant multi-objective registry. *Non-redundant* is the first design rule of [#123](https://github.com/autowarefoundation/auto_e2e/issues/123): every term must carry information the policy cannot already infer from its own inputs. A term computed only from what the policy observes can re-weight its preferences but cannot change its ranking of actions. Candidate sources are the world model's predicted consequences of an action, spatial structure the planner discards (the unpooled BEV, [#121](https://github.com/autowarefoundation/auto_e2e/issues/121)), and external ground truth such as HD-map conflict geometry.
 
 ```python
 R = w_safe * R_safety          # collision / off-road / TTC violation (hard, handcrafted)
@@ -176,7 +174,7 @@ To prevent this and enforce true reasoning-action consistency (**Alpamayo-R1** [
 
 #### 6.2.2 Progress as a Safety Metric
 
-In the one AlpaSim rollout of the imitation-only checkpoint reported in #123 (one scene, setup in #140), the policy caused no collision and never left the lane, but it covered only 8.48 m of the 73.77 m recorded route and was rear-ended (`collision_rear` 1.00). Safety and compliance terms alone would score that policy as near-perfect while it barely drives. In Phase 2, `R_progress` is therefore treated as a safety term: under-progress is consistent with being rear-ended by traffic that an at-fault collision metric does not attribute to the ego. (Note that in Phase 1, stationary-ego stalling is already prevented by construction via $R_{\text{track}}$ and the renderer validity bound of §6.1).
+In the one AlpaSim rollout of the imitation-only checkpoint reported in [#123](https://github.com/autowarefoundation/auto_e2e/issues/123) (one scene, setup in [#140](https://github.com/autowarefoundation/auto_e2e/issues/140)), the policy caused no collision and never left the lane, but it covered only 8.48 m of the 73.77 m recorded route and was rear-ended (`collision_rear` 1.00). Safety and compliance terms alone would score that policy as near-perfect while it barely drives. In Phase 2, `R_progress` is therefore treated as a safety term: under-progress is consistent with being rear-ended by traffic that an at-fault collision metric does not attribute to the ego. (Note that in Phase 1, stationary-ego stalling is already prevented by construction via $R_{\text{track}}$ and the renderer validity bound of §6.1).
 
 ## 7. Training Infrastructure (Future Work)
 
