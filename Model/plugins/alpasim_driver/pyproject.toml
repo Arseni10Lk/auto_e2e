@@ -16,7 +16,6 @@ dependencies = [
     "torchvision",
     "timm",
     "Pillow",
-    "shapely",
 ]
 
 [project.entry-points."alpasim.models"]

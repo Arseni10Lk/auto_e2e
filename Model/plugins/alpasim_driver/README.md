@@ -105,4 +105,9 @@ python -m pytest tests/test_alpasim_stream.py -m integration                    
 
 ## Rewards
 
-[`rewards.py`](./alpasim_autoe2e/rewards.py) holds the phase-1 reward library: deviation from the recorded trajectory, off-road, and `RewardManager`. The driver does not call it; it is for the RL loop (see `Design/reinforcement_learning.md`).
+[`rewards.py`](./alpasim_autoe2e/rewards.py) holds the phase-1 reward agreed in #123 and #177: `GroundTruthDeviationReward`.
+
+- **Tracking term:** for each AutoE2E decision, `-(w_ade·ADE + w_fde·FDE)` between the plan and the recorded drive at the same timestamps.
+- **Renderer validity bound:** once the ego itself is more than 3 m from the recording, a −10 penalty is added and `truncated` is set. The reconstruction is only reliable near the recorded path, so this bound does not share the tracking weight.
+
+[`tools/score_rollout.py`](./tools/score_rollout.py) applies the reward to an AlpaSim `rollout.asl`. The driver does not call the reward; the RL loop will (see `Design/reinforcement_learning.md`, which lists the further terms as future work).
