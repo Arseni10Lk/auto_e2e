@@ -3,14 +3,15 @@
 The tensors follow the packed training contract of the reactive BEVFormer T8
 model (``data_parsing/pre_extracted.py`` and ``data_parsing/kit_scenes``):
 
-* ``visual_tiles``: the current frame of every camera, squashed to a square
+* ``camera_tiles``: the current frame of every camera, squashed to a square
   tile and ImageNet-normalised.
 * ``camera_history_tiles`` / ``history_projections``: the seven previous frames,
   500 ms apart, with projections that map current-ego points into each
   historical image (``reference_frame: current_ego``).
 * ``egomotion_history``: 64 rows of ``[speed, acceleration, yaw_rate,
   curvature]`` derived from the ego poses by finite differences, the way
-  ``data_parsing/kit_scenes/egomotion.py`` derives them.
+  ``data_parsing/kit_scenes/egomotion.py`` derives them, with the curvature
+  rule of the rig profile's dataset.
 
 Everything is anchored at ``t0``, the timestamp of the newest camera frame; the
 driver reports the same ``t0`` back to AlpaSim with the prediction.

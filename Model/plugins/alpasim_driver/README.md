@@ -33,8 +33,9 @@ Against packed KITScenes v3.5 samples rebuilt from raw `poses.txt`, the projecti
 
 [`configs/calibration/`](./alpasim_autoe2e/configs/calibration/) holds one JSON file per dataset rig. Each file stores native intrinsics, image size, camera-to-reference extrinsics and the model slot of every camera. The driver picks the profile whose cameras equal `driver.inference.use_cameras`.
 
-- `kit_scenes.json` was exported with [`tools/export_kitscenes_calibration.py`](./tools/export_kitscenes_calibration.py). It matches 89 of the 117 KITScenes validation scenes. The other 28 use a later calibration revision, about 7 cm and 1° apart. For a world recorded with that revision, export its profile and set `AUTOE2E_RIG_PROFILE=/path/to/profile.json`.
-- nuPlan v1.1: export a profile from one log database with [`tools/export_nuplan_calibration.py`](./tools/export_nuplan_calibration.py). The cameras keep their channel names (`CAM_F0`, ...). Training undistorts nuPlan images, so the profile holds the rectified pinhole intrinsics, and the world must render rectified cameras. nuPlan calibration differs per vehicle; pick the log of the vehicle the world was recorded with.
+- `kit_scenes.json` was exported with [`tools/export_kitscenes_calibration.py`](./tools/export_kitscenes_calibration.py). It matches 89 of the 117 KITScenes validation scenes. The other 28 use two later calibration revisions (25 and 3 scenes), each about 7 cm and 1° from it. For a world recorded with a later revision, export its profile and set `AUTOE2E_RIG_PROFILE=/path/to/profile.json`.
+- `nuplan.json` is the nuPlan v1.1 rig of vehicle veh-35, exported from one of its log databases with [`tools/export_nuplan_calibration.py`](./tools/export_nuplan_calibration.py). The cameras keep their channel names (`CAM_F0`, ...). Training undistorts nuPlan images, so the profile holds the rectified pinhole intrinsics, and the world must render rectified cameras. All vehicles except veh-08 share the intrinsics, and their extrinsics differ by at most 9 cm and 2.8°. For a world recorded with another vehicle, export that vehicle's profile and set `AUTOE2E_RIG_PROFILE`.
+- `nuplan_nurec.json` is the same rig on NVIDIA camera IDs, for NuRec scenes of the NVIDIA rig (see `driver=autoe2e_nuplan` below).
 - A profile also states the dataset's curvature rule (`egomotion`): KITScenes divides by `max(speed, 0.1)`, while nuPlan zeroes curvature below 0.5 m/s and clips it to ±0.5.
 - The reference frame of a profile must be the rig frame of the rendered world. For KITScenes, that is the frame of `poses.txt`; for nuPlan, the ego pose.
 
@@ -44,7 +45,7 @@ Against packed KITScenes v3.5 samples rebuilt from raw `poses.txt`, the projecti
 
 | Setting | Value | Why |
 | :--- | :--- | :--- |
-| `driver.model.checkpoint_path` | required | A training checkpoint. `MOCK` drives straight without a model; `UNTRAINED` builds the release architecture with random weights. |
+| `driver.model.checkpoint_path` | required | A training checkpoint. `MOCK` drives straight without a model, to test the simulator plumbing with any driver config; `UNTRAINED` builds the release architecture with random weights. |
 | `driver.inference.context_length`, `subsample_factor` | `8`, `5` | Every 5th of the 10 Hz frames: the T8 history at 500 ms. |
 | `runtime.simulation_config.force_gt_duration_us` | `7_000_000` | The ego follows the recording for 7 s, so the 6.4 s egomotion history and the 3.5 s camera history are real before AutoE2E drives. |
 | `runtime.simulation_config.cameras` | native aspect ratio | The plugin squashes frames to square tiles, as in training. |
@@ -81,8 +82,6 @@ cd "$ALPASIM_ROOT" && uv run --project src/wizard alpasim_wizard \
 ```
 
 The wizard runs on the host, where the plugin is not installed, so `hydra.searchpath` points it at the plugin's configs; the driver itself runs inside the image.
-
-Before a full run, check the driver inside its container with [`examples/smoke_test_alpasim.py`](./examples/smoke_test_alpasim.py). It runs one prediction on synthetic frames and poses.
 
 The scene must render the rig's cameras. For KITScenes, that means a reconstruction that contains the six KITScenes cameras.
 
