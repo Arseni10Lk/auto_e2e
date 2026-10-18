@@ -53,10 +53,6 @@ class ClassFacts:
     has_forward: bool = False
 
 
-# ---------------------------------------------------------------------------
-# helpers
-# ---------------------------------------------------------------------------
-
 def _name_of(node: ast.AST) -> str | None:
     """Render a dotted name like nn.Linear or self.attn from an AST node."""
     if isinstance(node, ast.Name):
@@ -114,10 +110,6 @@ def _has_add(node: ast.AST) -> bool:
             return True
     return False
 
-
-# ---------------------------------------------------------------------------
-# per-class extraction
-# ---------------------------------------------------------------------------
 
 def _extract_init(cls: ast.ClassDef, source: str, facts: ClassFacts) -> None:
     init = next(

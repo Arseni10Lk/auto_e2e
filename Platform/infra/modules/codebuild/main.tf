@@ -58,8 +58,30 @@ resource "aws_iam_role_policy" "codebuild" {
       },
       {
         Effect   = "Allow"
+        Action   = "ec2:DescribeCapacityReservations"
+        Resource = "*"
+      },
+      {
+        Effect   = "Allow"
         Action   = ["s3:GetObject", "s3:PutObject", "s3:GetBucketLocation"]
         Resource = ["${aws_s3_bucket.cache.arn}", "${aws_s3_bucket.cache.arn}/*"]
+      },
+      {
+        Effect = "Allow"
+        Action = ["s3:GetObject", "s3:GetBucketLocation"]
+        Resource = [
+          "arn:aws:s3:::${var.cluster_name}-checkpoints-${local.account_id}",
+          "arn:aws:s3:::${var.cluster_name}-checkpoints-${local.account_id}/*",
+          "arn:aws:s3:::${var.cluster_name}-datasets-${local.account_id}",
+          "arn:aws:s3:::${var.cluster_name}-datasets-${local.account_id}/*",
+        ]
+      },
+      {
+        Effect = "Allow"
+        Action = ["s3:PutObject"]
+        Resource = [
+          "arn:aws:s3:::${var.cluster_name}-datasets-${local.account_id}/*/odd/configs/*",
+        ]
       },
     ]
   })
@@ -110,7 +132,7 @@ output "project_name" {
   value = aws_codebuild_project.images.name
 }
 
-# --- Flyte Register (VPC内, flyteadminにアクセス可能) ---
+# --- Flyte Register (runs in the VPC so it can reach flyteadmin) ---
 
 resource "aws_security_group" "flyte_register" {
   name_prefix = "${var.cluster_name}-flyte-register-"

@@ -1,11 +1,11 @@
 # DataModelConsole-dedicated infra: an internal ALB security group locked to
-# CloudFront, plus a CloudFront distribution that fronts the console. ISOLATED
+# CloudFront, plus a CloudFront distribution that fronts the console. Isolated
 # state (see versions.tf) so this never touches existing Platform resources.
 #
-# All cluster subnets are PRIVATE, so the ALB the k8s Ingress creates is internal
-# and NOT internet-reachable. CloudFront reaches it through a VPC ORIGIN — it
+# All cluster subnets are private, so the ALB the k8s Ingress creates is internal
+# and not internet-reachable. CloudFront reaches it through a VPC origin: it
 # places an AWS-managed ENI inside this VPC and connects from that private
-# address, NOT from public edge IPs. Viewers hit CloudFront over HTTPS (default
+# address, not from public edge IPs. Viewers hit CloudFront over HTTPS (default
 # *.cloudfront.net cert); CloudFront→ALB is plain HTTP on alb_port. No ACM /
 # Cognito / Lambda@Edge for this dashboard-only deploy.
 
@@ -70,7 +70,7 @@ data "aws_security_group" "cloudfront_vpc_origin" {
 
 # Ingress. Phase 1 (bootstrap): admit alb_port from the VPC CIDR so the internal
 # ALB is reachable in-VPC before the managed SG exists (still not
-# internet-exposed — internal scheme). Phase 2 (locked): admit alb_port ONLY
+# internet-exposed — internal scheme). Phase 2 (locked): admit alb_port only
 # from CloudFront's managed VPC-origin ENIs; nothing else in the VPC can reach
 # the ALB.
 resource "aws_vpc_security_group_ingress_rule" "from_cloudfront_sg" {

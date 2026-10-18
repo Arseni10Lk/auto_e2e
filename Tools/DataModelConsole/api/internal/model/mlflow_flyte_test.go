@@ -5,9 +5,8 @@ import (
 	"testing"
 )
 
-// Representative payloads mirror the real MLflow REST / Flyte Admin JSON shapes
-// (the in-cluster services are unreachable from a dev laptop, so these encode
-// the documented contracts the normalizers must handle).
+// Representative payloads mirror the documented MLflow REST and Flyte Admin
+// JSON shapes the normalizers must handle.
 
 func TestNormalizeMLflowExperiments(t *testing.T) {
 	body := []byte(`{"experiments":[
@@ -24,7 +23,7 @@ func TestNormalizeMLflowExperiments(t *testing.T) {
 	if out[0].ExperimentID != "1" || out[0].Name != "il-train" || out[0].LastUpdateTime != 1699000000000 {
 		t.Errorf("exp0 = %+v", out[0])
 	}
-	// last_update_time as a STRING must still coerce to int64.
+	// last_update_time as a string must still coerce to int64.
 	if out[1].LastUpdateTime != 1699000001000 {
 		t.Errorf("exp1 last_update_time = %d, want 1699000001000", out[1].LastUpdateTime)
 	}
@@ -62,7 +61,7 @@ func TestNormalizeMLflowRuns(t *testing.T) {
 	if r.Metrics["eval/ade"] != 2.5 {
 		t.Errorf("metric eval/ade = %v, want 2.5", r.Metrics["eval/ade"])
 	}
-	// Metric value as a STRING must coerce.
+	// Metric value as a string must coerce.
 	if r.Metrics["loss"] != 0.31 {
 		t.Errorf("metric loss = %v, want 0.31", r.Metrics["loss"])
 	}
@@ -186,7 +185,7 @@ func TestNormalizeFlyteExecutions(t *testing.T) {
 }
 
 func TestNormalizeFlyteExecution_Single(t *testing.T) {
-	// The get-by-id endpoint returns the UNWRAPPED execution (no envelope).
+	// The get-by-id endpoint returns the unwrapped execution (no envelope).
 	body := []byte(`{"id":{"name":"exec9"},
 		"spec":{"launchPlan":{"name":"lp_train_il"}},
 		"closure":{"phase":"FAILED","createdAt":"2026-07-10T00:00:00Z","startedAt":"2026-07-10T00:00:03Z","duration":"12.0s","workflowId":{"name":"wf_train_il"}}}`)

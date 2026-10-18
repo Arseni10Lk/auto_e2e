@@ -1,16 +1,11 @@
-"""Gradient-accumulation equivalence (train_il #13/#98 bs=1 bottleneck).
+"""Gradient-accumulation equivalence for train_il.
 
-The World-Model windows force batch_size=1 on the L40S, but the trajectory loss
-needs a larger effective batch to descend (the bs=4 imitation run reached 0.36;
-bs=1 plateaus ~0.84 on per-sample SmoothL1 noise). train_il recovers the signal
-by accumulating grads over N micro-batches with a 1/N loss scale, stepping once
-per window.
-
-The invariant this guards: accumulating N size-1 micro-batches (loss/N each,
-zero_grad only at window start, step at window end) must produce the SAME weights
-as ONE mean-reduced batch of size N. If the 1/N scale or the zero_grad/step
-placement is wrong, the effective learning rate silently changes and the whole
-point (matching the bs=4 run) is lost. Pure torch, no GPU / model / shards.
+The World-Model windows force batch_size=1, so train_il accumulates grads over
+N micro-batches with a 1/N loss scale and steps once per window. Accumulating N
+size-1 micro-batches (loss/N each, zero_grad only at window start, step at window
+end) must produce the same weights as one mean-reduced batch of size N; a wrong
+scale or zero_grad/step placement silently changes the effective learning rate.
+Pure torch, no GPU / model / shards.
 """
 
 from __future__ import annotations

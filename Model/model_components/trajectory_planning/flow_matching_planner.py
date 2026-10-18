@@ -35,7 +35,7 @@ class FlowMatchingPlanner(BasePlanner):
     ``dx/dt = v_theta(x, t, c)`` from t=0 to t=1 with a fixed-step Euler
     solver (``num_inference_steps`` steps). The BEV map and the
     modulation conditioning are computed once per sample and reused
-    across all integration steps so the ODE call is cheap.    
+    across all integration steps.
     """
 
     def __init__(self, embed_dim=256, num_timesteps=64, num_signals=2,
@@ -82,10 +82,6 @@ class FlowMatchingPlanner(BasePlanner):
         self.time_embed_dim = time_embed_dim
         self.num_heads = num_heads
 
-        # Flow timestep schedule. The default is the pi-0.5 / Alpamayo
-        # shifted Beta(beta_alpha, 1) sampler, which biases t toward the
-        # noisy (low-t) end and empirically improves flow-matching policy
-        # training; "uniform" recovers the textbook U(0, 1).
         self.timestep_sampler = timestep_sampler
         self.beta_alpha = float(beta_alpha)
         self.beta_scale = float(beta_scale)
@@ -93,23 +89,16 @@ class FlowMatchingPlanner(BasePlanner):
             torch.tensor(self.beta_alpha), torch.tensor(1.0),
         )
 
-        # Conditioning encoders for the AdaLN modulation path. BEV is NOT
-        # pooled into this conditioning — it enters the velocity field via
-        # cross-attention to preserve spatial detail.
+        # AdaLN conditioning encoders. BEV is not pooled into this
+        # conditioning; it enters via cross-attention to keep spatial detail.
         self.ego_state_proj = nn.Linear(egomotion_dim, embed_dim)
         self.visual_history_proj = nn.Linear(visual_history_dim, embed_dim)
 
-        # Reasoning coupling (zero-init; no-op at init). Two injection points by
-        # mode:
-        #   * "pooled_latent": add the reasoning residual to the AdaLN
-        #     conditioning vector (mod_cond), reaching every action token's
-        #     modulation, computed once per forward().
-        #   * "horizon_cross_attention": let each per-timestep ACTION QUERY
-        #     attend the 5 horizon tokens inside _v_theta, so a future timestep
-        #     can look at the now/1s/2s/3s/4s reasoning directly — preserving
-        #     *when* a hazard matters (the whole point of horizon tokens). A
-        #     single vector mod_cond cannot express that, so this mode does NOT
-        #     touch mod_cond.
+        # Reasoning injection point by mode:
+        #   * "pooled_latent": residual added to the AdaLN conditioning vector.
+        #   * "horizon_cross_attention": each per-timestep action query attends
+        #     the 5 horizon tokens inside _v_theta, preserving when a hazard
+        #     matters; mod_cond is left untouched.
         self.reasoning_mode = reasoning_mode
         self.reasoning_coupling = ReasoningCoupling(embed_dim, mode=reasoning_mode)
 
@@ -119,8 +108,7 @@ class FlowMatchingPlanner(BasePlanner):
             nn.Linear(embed_dim, embed_dim),
         )
 
-        # Per-timestep action token projection: each (acc, curv) pair becomes
-        # an embed_dim query.
+        # Each (acc, curv) pair becomes an embed_dim query.
         self.action_proj = nn.Linear(num_signals, embed_dim)
         self.bev_kv_proj = nn.Linear(embed_dim, embed_dim)
 
@@ -128,8 +116,7 @@ class FlowMatchingPlanner(BasePlanner):
             embed_dim, num_heads, batch_first=True,
         )
 
-        # AdaLN: produce (gamma, beta) from (time + visual_history + ego).
-        # The LayerNorm has no affine — gamma/beta supply the scale and shift.
+        # AdaLN: the LayerNorm has no affine; gamma/beta supply scale and shift.
         self.attn_norm = nn.LayerNorm(embed_dim, elementwise_affine=False)
         self.adaln_modulation = nn.Sequential(
             nn.SiLU(),
@@ -224,43 +211,33 @@ class FlowMatchingPlanner(BasePlanner):
 
     def _modulation_conditioning(self, visual_history, egomotion_history,
                                  reasoning_latent=None):
-        """Conditioning vector fed into AdaLN — excludes BEV (cross-attn) and
-        time (added per-step in the Euler loop).
+        """AdaLN conditioning vector, excluding BEV (cross-attention) and time.
 
-        In "pooled_latent" mode the zero-init reasoning residual is added here
-        (no-op at init), modulating every action token, computed once per
-        forward(). In "horizon_cross_attention" mode the reasoning enters at the
-        action queries inside _v_theta instead, so nothing is added here.
+        Adds the reasoning residual only in "pooled_latent" mode.
         """
         base = (
             self.visual_history_proj(visual_history)
             + self.ego_state_proj(egomotion_history)
         )
-        # Only the pooled path uses mod_cond; horizon tokens are routed to _v_theta.
         latent = reasoning_latent if self.reasoning_mode == "pooled_latent" else None
         return self.reasoning_coupling(base, reasoning_latent=latent)
-
 
     def _sample_timesteps(self, batch_size, device, dtype):
         """Sample flow timesteps t in [0, 1).
 
         Default follows Alpamayo / pi-0.5: a shifted Beta(beta_alpha, 1.0)
-        biased toward the noisy (low-t) end, which improves flow-matching
-        policy training. ``timestep_sampler='uniform'`` falls back to U(0, 1).
+        biased toward the noisy (low-t) end. ``timestep_sampler='uniform'`` falls back to U(0, 1).
         """
         if self.timestep_sampler == "uniform":
             return torch.rand(batch_size, device=device, dtype=dtype)
-        # beta: t = beta_scale - beta_scale * Beta(alpha, 1).sample()
         b = self._beta_dist.sample((batch_size,)).to(device=device, dtype=dtype)
         return self.beta_scale - self.beta_scale * b
 
     def construct_training_data(self, trajectory_target):
         """Sample (u_t, t, target_velocity) for one flow-matching training step.
 
-        Used internally by ``compute_planner_loss``. Kept public so that
-        advanced callers can share the same (u_t, t) across multiple loss
-        terms without re-sampling — the canonical path is
-        ``compute_planner_loss``, which never exposes the raw velocity.
+        Public so callers can share the same (u_t, t) across multiple loss
+        terms without re-sampling.
 
         Returns:
             u_t: [B, trajectory_dim] — the noisy interpolated state.
@@ -275,8 +252,6 @@ class FlowMatchingPlanner(BasePlanner):
         )
         u_t = (1.0 - t).unsqueeze(-1) * x_0 + t.unsqueeze(-1) * trajectory_target
         target_velocity = trajectory_target - x_0
-        # Cheap defense-in-depth: catch shape regressions even on the
-        # internal sampling path.
         self._validate_flow_inputs(u_t, t, B)
         return u_t, t, target_velocity
 
@@ -296,28 +271,20 @@ class FlowMatchingPlanner(BasePlanner):
         Args:
             u_t: [B, trajectory_dim]
             t: [B]
-            bev_seq: [B, H*W, embed_dim] — BEV keys/values already produced
-                by ``_project_bev``. Precomputed once per forward() to avoid
-                re-flattening and re-projecting on every Euler step.
+            bev_seq: [B, H*W, embed_dim] BEV keys/values from ``_project_bev``.
             mod_cond: [B, embed_dim] — visual_history + egomotion conditioning.
             horizon_tokens: optional [B, 5, embed_dim] reasoning tokens. In
-                "horizon_cross_attention" mode each action query attends these
-                (zero-init, no-op until trained) so timestep-t actions can look
-                at the now/1s/2s/3s/4s reasoning; ignored in other modes.
+                "horizon_cross_attention" mode each action query attends these;
+                ignored in other modes.
 
         Returns:
             velocity: [B, trajectory_dim]
         """
         B = u_t.shape[0]
 
-        # Action queries: one token per future timestep.
         u_t_seq = u_t.reshape(B, self.num_timesteps, self.num_signals)
         queries = self.action_proj(u_t_seq)                      # [B, T, C]
 
-        # Horizon-aware reasoning: action queries attend the 5 horizon tokens.
-        # Zero-init residual (no-op at init); only fires in cross-attention mode
-        # with horizon_tokens present. Preserves per-timestep timing information
-        # a single pooled vector would lose.
         if self.reasoning_mode == "horizon_cross_attention" and horizon_tokens is not None:
             queries = self.reasoning_coupling(
                 queries, horizon_tokens=horizon_tokens, query=queries
@@ -325,7 +292,6 @@ class FlowMatchingPlanner(BasePlanner):
 
         attended, _ = self.cross_attn(queries, bev_seq, bev_seq) # [B, T, C]
 
-        # AdaLN: time + (visual_history + egomotion) → (gamma, beta).
         t_emb = self.time_mlp(self._sinusoidal_time_embedding(t))
         gamma, beta = self.adaln_modulation(mod_cond + t_emb).chunk(2, dim=-1)
         normed = self.attn_norm(attended)
@@ -364,7 +330,6 @@ class FlowMatchingPlanner(BasePlanner):
             visual_history, egomotion_history,
             reasoning_latent=reasoning_latent,
         )
-        # bev_seq is computed once and reused across every Euler step.
         bev_seq = self._project_bev(bev_features)
 
         B = bev_features.shape[0]

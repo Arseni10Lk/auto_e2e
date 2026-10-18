@@ -1,6 +1,6 @@
-"""Tests for the whole-record JSONL JOIN interchange (#98/#117).
+"""Tests for the whole-record JSONL JOIN interchange.
 
-The teacher-as-cached-stage refactor writes each label as one full record per
+The cached teacher stage writes each label as one full record per
 line (write_records_jsonl) so data_processing can JOIN labels into shards by
 sample_id (load_records_by_sample_id). No torch/GPU/network.
 """

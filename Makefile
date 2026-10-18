@@ -1,7 +1,7 @@
 .DEFAULT_GOAL := help
 
 PYTEST = python -m pytest
-# pytorch wheel channel: cpu (default, CI parity) or a CUDA build such as cu118/cu121
+# pytorch wheel channel: cpu (default, CI parity) or a CUDA build such as cu118/cu126/cu128
 TORCH_CHANNEL ?= cpu
 # suite for test-local: all | map | integration
 SUITE ?= all
@@ -34,7 +34,7 @@ typecheck: deps ## mypy over the project (same as CI)
 	cd Model && mypy .
 
 test: deps ## unit tests (same selection as CI)
-	$(PYTEST) Model/tests -v
+	$(PYTEST) Model/tests Platform/tests -v
 
 # map suite runs from Model/ so `data_parsing.*` imports resolve (no __init__.py).
 # The integration suite is slow and downloads pretrained backbone weights on first run.
@@ -58,14 +58,14 @@ benchmark: ## speed benchmark
 help: ## list available targets
 	@echo "Getting started (activate your virtualenv first — targets use the active python/pip):"
 	@echo "  make setup-local                  install everything for local dev (CPU torch wheels)"
-	@echo "  make setup TORCH_CHANNEL=cu121    pinned deps with CUDA 12.1 torch wheels instead"
+	@echo "  make setup TORCH_CHANNEL=cu126    pinned deps with CUDA 12.6 torch wheels instead"
 	@echo "  make test-local                   run all local tests (unit + map + integration)"
 	@echo "  make test-local SUITE=map         run a single suite (all | map | integration)"
-	@echo "  make ci                           run exactly what CI runs (lint + unit tests)"
+	@echo "  make ci                           run exactly what CI runs (lint + typecheck + unit tests)"
 	@echo ""
 	@echo "Targets:"
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-22s\033[0m %s\n", $$1, $$2}'
 	@echo ""
-	@echo "Defaults: TORCH_CHANNEL=$(TORCH_CHANNEL) (cpu | cu118 | cu121 | ...), SUITE=$(SUITE) (all | map | integration), PYTEST='$(PYTEST)'"
+	@echo "Defaults: TORCH_CHANNEL=$(TORCH_CHANNEL) (cpu | cu118 | cu126 | cu128 | ...), SUITE=$(SUITE) (all | map | integration), PYTEST='$(PYTEST)'"
 
 .PHONY: setup setup-map setup-local deps deps-map lint typecheck test test-local test-local-all test-local-map test-local-integration ci benchmark help

@@ -1,13 +1,12 @@
-"""Guards the sample_id JOIN invariant (#98 labeling audit).
+"""Guards the sample_id JOIN invariant between reasoning labels and frames.
 
 generate_reasoning_labels builds L2D with include_world_model_windows=True and
 enumerates range(len(ds)) as the sample_ids the teacher labels. data_processing
-must enumerate the SAME sample set to JOIN labels onto the right frames. That
-holds today only because the World-Model window margins never exceed the
-egomotion margins, so len(L2DDataset) is WM-independent. This is a pure-logic
-regression guard: if someone grows the WM window past the egomotion margin, the
-sample sets would diverge and every reasoning label would silently attach to the
-WRONG frame — this test fails loudly first.
+must enumerate the same sample set to JOIN labels onto the right frames. That
+holds only while the World-Model window margins never exceed the egomotion
+margins, so len(L2DDataset) is WM-independent. If the WM window grows past the
+egomotion margin, every reasoning label would silently attach to the wrong
+frame; this test fails first.
 """
 
 from __future__ import annotations
@@ -36,10 +35,8 @@ def test_nvidia_horizon_reach_within_future_margin():
     must stay within the egomotion future margin, or get_front_clip would run off
     the end of the valid-sample window and the sample_id enumeration (which uses
     those margins) would not match data_processing."""
-    # nvidia_physical_ai.egomotion imports pandas + physical_ai_av (NVIDIA-only
-    # optional deps not in the core requirements / CI env). Skip when unavailable,
-    # matching the other NVIDIA tests — this is a pure-constant invariant check, not
-    # something that should force heavyweight optional deps into the base test env.
+    # nvidia_physical_ai.egomotion imports pandas + physical_ai_av, optional
+    # NVIDIA-only deps that are not in the core test env.
     import pytest
     pytest.importorskip("pandas")
     pytest.importorskip("physical_ai_av")

@@ -1,16 +1,15 @@
-"""World-Model JEPA must NOT reshape the shared trajectory backbone (#13).
+"""World-Model JEPA must not reshape the shared trajectory backbone.
 
 The WM shares the trajectory branch's image backbone (AutoE2E passes the same
 instance to ReactiveE2E and to WorldActionModel). If the JEPA future-feature
 loss backprops into that shared backbone, it pulls the representation toward
-"predict future features" and away from "features the planner regresses a
-trajectory from" — empirically flooring the trajectory loss at ~0.845 vs the
-0.36 an imitation-only run reaches, regardless of batch size.
+predicting future features and away from what the planner needs, which floors
+the trajectory loss well above an imitation-only run.
 
 FrameEncoder.detach_backbone (default True) stop-gradients the backbone so JEPA
-trains only the WM's own proj / aggregator / future_predictor. These tests pin
-that contract: JEPA gradient must be ZERO on the shared backbone yet NONZERO on
-the WM's predictor. Mock backbone, CPU, no shards.
+trains only the WM's own proj / aggregator / future_predictor. JEPA gradient
+must be zero on the shared backbone yet nonzero on the WM's predictor.
+Mock backbone, CPU, no shards.
 """
 
 from __future__ import annotations

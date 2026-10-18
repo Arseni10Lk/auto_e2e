@@ -1,6 +1,5 @@
 // Package store implements the DynamoDB-backed cache for the console API:
-// shard playback indexes (read-through, replacing the OOM-prone in-memory
-// map), precomputed reasoning-label statistics, and a scene-by-label search
+// shard playback indexes (read-through), precomputed reasoning-label statistics, and a scene-by-label search
 // index. It follows a single-table design on table `auto-e2e-console`
 // (pk HASH, sk RANGE); every partition/sort key is constructed by the pure
 // functions in this file so the layout is testable without AWS.
@@ -68,9 +67,8 @@ func ReasoningInventoryPK(dataset, version string) (string, error) {
 // (field,value) reasoning label: LBL#{dataset}#{promptVersion}#{field}#{value}.
 // Querying this pk returns all scenes with that label (via SceneLabelSK sorts).
 //
-// Note the scene index is keyed by (dataset, promptVersion) only — NOT by
-// dataset version — because reasoning labels are not partitioned by shard
-// version in S3 (they are keyed by the flat s%08d sample id).
+// The scene index is keyed by (dataset, promptVersion) only, not by dataset
+// version, because reasoning labels in S3 are keyed by the flat s%08d sample id.
 func SceneLabelPK(dataset, promptVersion, field, value string) string {
 	return fmt.Sprintf("LBL#%s#%s#%s#%s", dataset, promptVersion, field, value)
 }

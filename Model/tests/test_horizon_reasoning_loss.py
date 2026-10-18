@@ -1,4 +1,4 @@
-"""Tests for HorizonReasoningLoss (issue #98, v2).
+"""Tests for HorizonReasoningLoss.
 
 Synthetic tensors, no GPU / network. Covers:
     * loss is finite;

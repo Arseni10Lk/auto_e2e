@@ -33,13 +33,13 @@ from data_parsing.l2d.world_model_windows import (
 
 from .camera import (
     CAMERA_NAMES,
+    CAMERA_SLOT_BY_NAME,
     compute_camera_projection_matrices,
+    compute_temporal_camera_projection_matrices,
     load_camera_frame,
 )
 from .egomotion import (
-    MIN_ROWS,
     _FUTURE_TIMESTEPS,
-    _HISTORY_TIMESTEPS,
     load_egomotion,
     pose_yaws,
     poses_to_arrays,
@@ -47,6 +47,19 @@ from .egomotion import (
 from .map import _cached_scene_map, generate_bev_map_tile
 from .navigation import KitScenesSceneNavigation, build_scene_navigation
 from .source import KITSCENES_DATA_REVISION
+from .temporal_contract import (
+    KITSCENES_BENCHMARK_FUTURE_STEPS,
+    KITSCENES_BENCHMARK_HISTORY_STEPS,
+    KITSCENES_TRAINING_FUTURE_STEPS,
+    KITSCENES_TRAINING_HISTORY_STEPS,
+)
+from reactive_training_contracts import (
+    REACTIVE_BEVFORMER_FRAME_INTERVAL_US,
+    REACTIVE_BEVFORMER_FRAME_OFFSETS,
+    REACTIVE_BEVFORMER_HISTORY_FRAMES,
+    REACTIVE_FRONT_CAMERA_IMAGE_SIZE,
+    REACTIVE_FRONT_CAMERA_INDEX,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -60,10 +73,12 @@ class KitScenesSample(TypedDict):
     egomotion_history: torch.Tensor
     visual_history: torch.Tensor
     trajectory_target: torch.Tensor
+    trajectory_xy_m: np.ndarray
+    trajectory_valid: np.ndarray
     scene_id: str
     frame_idx: int
-    pose_current: dict[str, float | int]
-    gps_future: np.ndarray
+    pose_current: NotRequired[dict[str, float | int]]
+    gps_future: NotRequired[np.ndarray]
     camera_params: torch.Tensor
     map_tile: NotRequired[torch.Tensor]
     navigation_members: NotRequired[dict[str, bytes]]
@@ -104,6 +119,42 @@ def _heading_cw_from_north(yaw_rad: float) -> float:
     return float((90.0 - np.degrees(yaw_rad)) % 360.0)
 
 
+def _local_future_to_ego_xy(
+    positions_local: np.ndarray,
+    *,
+    frame_idx: int,
+    yaw_rad: float,
+    future_steps: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Project scene-local future positions into the current ego FLU frame."""
+    if not 1 <= future_steps <= _FUTURE_TIMESTEPS:
+        raise ValueError(
+            f"future_steps must be in [1,{_FUTURE_TIMESTEPS}]"
+        )
+    positions = np.asarray(positions_local, dtype=np.float64)
+    end = frame_idx + future_steps + 1
+    if positions.ndim != 2 or positions.shape[1] != 2 or end > len(positions):
+        raise ValueError("KITScenes local trajectory window is invalid")
+    delta = positions[frame_idx + 1:end] - positions[frame_idx]
+    cosine = np.cos(yaw_rad)
+    sine = np.sin(yaw_rad)
+    trajectory = np.zeros(
+        (_FUTURE_TIMESTEPS, 2),
+        dtype=np.float32,
+    )
+    trajectory[:future_steps, 0] = (
+        delta[:, 0] * cosine + delta[:, 1] * sine
+    )
+    trajectory[:future_steps, 1] = (
+        -delta[:, 0] * sine + delta[:, 1] * cosine
+    )
+    valid = np.zeros(_FUTURE_TIMESTEPS, dtype=np.bool_)
+    valid[:future_steps] = True
+    if not np.isfinite(trajectory[valid]).all():
+        raise ValueError("KITScenes local trajectory contains non-finite values")
+    return trajectory, valid
+
+
 def _contiguous_prefix_length(indices: list[int]) -> int:
     """Return the number of contiguous camera frame IDs starting at zero."""
     expected = 0
@@ -138,6 +189,8 @@ class KitScenesDataset(Dataset):
         reasoning_clip_only: bool = False,
         include_navigation: bool = False,
         source_revision: str = KITSCENES_DATA_REVISION,
+        benchmark_protocol: bool = False,
+        allow_mapless: bool = False,
     ) -> None:
         if image_size <= 0:
             raise ValueError(f"image_size must be positive, got {image_size}")
@@ -148,6 +201,14 @@ class KitScenesDataset(Dataset):
             )
 
         self.camera_names = list(camera_names or CAMERA_NAMES)
+        try:
+            self.camera_slots = [
+                CAMERA_SLOT_BY_NAME[name] for name in self.camera_names
+            ]
+        except KeyError as exc:
+            raise ValueError(
+                f"camera_names contains an unsupported camera: {exc.args[0]}"
+            ) from exc
         self.rasterize_map_at_runtime = rasterize_map_at_runtime
         self.image_size = image_size
         self._wm_enabled = include_world_model_windows
@@ -158,6 +219,22 @@ class KitScenesDataset(Dataset):
         self._front_cam = self.camera_names[0]
         self._include_navigation = include_navigation
         self._source_revision = source_revision
+        self._benchmark_protocol = benchmark_protocol
+        self._allow_mapless = allow_mapless
+        if allow_mapless and include_navigation:
+            raise ValueError(
+                "mapless KITScenes evaluation cannot include navigation"
+            )
+        self._sampling_history_steps = (
+            KITSCENES_BENCHMARK_HISTORY_STEPS
+            if benchmark_protocol
+            else KITSCENES_TRAINING_HISTORY_STEPS
+        )
+        self._sampling_future_steps = (
+            KITSCENES_BENCHMARK_FUTURE_STEPS
+            if benchmark_protocol
+            else KITSCENES_TRAINING_FUTURE_STEPS
+        )
 
         self._sdk = _KITScenesSDK(root=data_root, split=split)
         available = set(self._sdk.scene_ids)
@@ -174,6 +251,7 @@ class KitScenesDataset(Dataset):
             )
 
         self._scene_egomotion: dict[str, np.ndarray] = {}
+        self._scene_poses: dict[str, tuple[Any, ...]] = {}
         self._scene_positions_local: dict[str, np.ndarray] = {}
         self._scene_latlon: dict[str, np.ndarray] = {}
         self._scene_yaws: dict[str, np.ndarray] = {}
@@ -207,12 +285,17 @@ class KitScenesDataset(Dataset):
             return []
 
         poses = tuple(load_ego_poses(loader.scene_path))
-        if len(poses) < MIN_ROWS:
+        minimum_rows = (
+            self._sampling_history_steps
+            + self._sampling_future_steps
+            + 1
+        )
+        if len(poses) < minimum_rows:
             logger.warning(
                 "Scene %s has only %d ego poses (need %d). Skipping.",
                 scene_id,
                 len(poses),
-                MIN_ROWS,
+                minimum_rows,
             )
             return []
 
@@ -225,8 +308,8 @@ class KitScenesDataset(Dataset):
             len(loader.get_reference_timestamps()),
             *camera_lengths,
         )
-        min_idx = _HISTORY_TIMESTEPS
-        max_idx = usable - _FUTURE_TIMESTEPS - 1
+        min_idx = self._sampling_history_steps
+        max_idx = usable - self._sampling_future_steps - 1
         if max_idx < min_idx:
             logger.warning(
                 "Scene %s: usable span %d too short for a sample. Skipping.",
@@ -236,17 +319,35 @@ class KitScenesDataset(Dataset):
             return []
 
         egomotion, positions_local = poses_to_arrays(poses[:usable])
-        positions_utm = _local_xy_to_absolute_utm(
-            loader.scene_path, positions_local
+        scene_map = (
+            None
+            if self._allow_mapless
+            else _cached_scene_map(loader.scene_path)
         )
+        if scene_map is None:
+            if not self._allow_mapless:
+                raise ValueError(
+                    f"KITScenes scene {scene_id!r} has no loadable map origin"
+                )
+            positions_utm = None
+        else:
+            origin = np.asarray(scene_map.utm_origin, dtype=np.float64)
+            if origin.shape != (2,):
+                raise ValueError(
+                    "KITScenes map origin must have shape (2,), "
+                    f"got {origin.shape}"
+                )
+            positions_utm = positions_local + origin
         yaws = pose_yaws(poses[:usable])
         timestamps_ns = np.asarray(
             [pose.timestamp_ns for pose in poses[:usable]], dtype=np.int64
         )
 
         self._scene_egomotion[scene_id] = egomotion
+        self._scene_poses[scene_id] = poses[:usable]
         self._scene_positions_local[scene_id] = positions_local
-        self._scene_latlon[scene_id] = _utm32_to_wgs84(positions_utm)
+        if positions_utm is not None:
+            self._scene_latlon[scene_id] = _utm32_to_wgs84(positions_utm)
         self._scene_yaws[scene_id] = yaws
         self._scene_timestamps_ns[scene_id] = timestamps_ns
         self._scene_camera_params[scene_id] = compute_camera_projection_matrices(
@@ -255,6 +356,9 @@ class KitScenesDataset(Dataset):
             image_size=self.image_size,
         )
         if self._include_navigation:
+            from navigation.geometry import AUTOE2E_NAVIGATION_GEOMETRY
+            from navigation.rasterizer import NativeNavigationRasterizer
+
             self._scene_navigation[scene_id] = build_scene_navigation(
                 scene_id=scene_id,
                 scene_path=loader.scene_path,
@@ -262,6 +366,9 @@ class KitScenesDataset(Dataset):
                 yaws_rad=yaws,
                 timestamps_ns=timestamps_ns,
                 source_revision=self._source_revision,
+                rasterizer=NativeNavigationRasterizer(
+                    AUTOE2E_NAVIGATION_GEOMETRY
+                ),
             )
 
         return [
@@ -271,6 +378,19 @@ class KitScenesDataset(Dataset):
 
     def __len__(self) -> int:
         return len(self._samples)
+
+    @property
+    def sampling_future_steps(self) -> int:
+        """Return the number of source-labeled future steps."""
+        return self._sampling_future_steps
+
+    @property
+    def has_geospatial(self) -> bool:
+        """Return whether every loaded scene has an absolute map origin."""
+        return bool(self._scene_ids) and all(
+            scene_id in self._scene_latlon
+            for scene_id in self._scene_ids
+        )
 
     def sample_uid(self, idx: int) -> str:
         scene_id, frame_idx = self._samples[idx]
@@ -339,9 +459,157 @@ class KitScenesDataset(Dataset):
             rows.append((scene_id, row))
         return rows
 
+    def bevformer_history_rows(
+        self,
+        idx: int,
+    ) -> list[tuple[str, int]]:
+        """Return seven 0.5-second history rows in oldest-to-newest order."""
+        scene_id, frame_idx = self._samples[idx]
+        row_stride = round(
+            (REACTIVE_BEVFORMER_FRAME_INTERVAL_US / 1_000_000)
+            * self._source_hz
+        )
+        if row_stride <= 0 or not np.isclose(
+            row_stride / self._source_hz,
+            REACTIVE_BEVFORMER_FRAME_INTERVAL_US / 1_000_000,
+            rtol=0.0,
+            atol=1e-9,
+        ):
+            raise ValueError(
+                "KITScenes source frequency cannot represent T8 interval"
+            )
+        rows = [
+            frame_idx + offset * row_stride
+            for offset in REACTIVE_BEVFORMER_FRAME_OFFSETS[:-1]
+        ]
+        if (
+            len(rows) != REACTIVE_BEVFORMER_HISTORY_FRAMES
+            or rows != sorted(rows)
+            or rows[-1] >= frame_idx
+            or rows[0] < 0
+        ):
+            raise IndexError("KITScenes T8 history leaves the scene")
+        timestamps = self._scene_timestamps_ns[scene_id]
+        reference_timestamp = int(timestamps[frame_idx])
+        maximum_error_ns = 0
+        for offset, row in zip(
+            REACTIVE_BEVFORMER_FRAME_OFFSETS[:-1],
+            rows,
+            strict=True,
+        ):
+            expected = (
+                reference_timestamp
+                + offset * REACTIVE_BEVFORMER_FRAME_INTERVAL_US * 1000
+            )
+            maximum_error_ns = max(
+                maximum_error_ns,
+                abs(int(timestamps[row]) - expected),
+            )
+        if maximum_error_ns > 50_000_000:
+            raise ValueError(
+                "KITScenes T8 history timestamp error exceeds 50 ms"
+            )
+        return [(scene_id, row) for row in rows]
+
+    def bevformer_history_frame_ids(
+        self,
+        idx: int,
+    ) -> list[list[str]]:
+        """Return shared-pool frame IDs for the seven T8 history rows."""
+        return [
+            [
+                f"kitscenes-{UID_SCHEMA_VERSION}-{scene_id}-"
+                f"r{row:06d}-c{view}"
+                for view in range(len(self.camera_names))
+            ]
+            for scene_id, row in self.bevformer_history_rows(idx)
+        ]
+
+    def reactive_calibration_for(
+        self,
+        idx: int,
+        *,
+        image_size: int,
+    ) -> dict[str, object]:
+        """Return current and current-ego-aligned T8 camera projections."""
+        scene_id, frame_idx = self._samples[idx]
+        history_rows = self.bevformer_history_rows(idx)
+        history_indices = [row for _, row in history_rows]
+        current_projection = (
+            self._scene_camera_params[scene_id]
+            if image_size == self.image_size
+            else compute_camera_projection_matrices(
+                self._sdk.get_sensor_loader(scene_id),
+                camera_names=self.camera_names,
+                image_size=image_size,
+            )
+        )
+        history_projection = (
+            compute_temporal_camera_projection_matrices(
+                self._sdk.get_sensor_loader(scene_id),
+                self._scene_poses[scene_id],
+                reference_frame_idx=frame_idx,
+                history_frame_indices=history_indices,
+                camera_names=self.camera_names,
+                image_size=image_size,
+            )
+        )
+        front_projection = compute_camera_projection_matrices(
+            self._sdk.get_sensor_loader(scene_id),
+            camera_names=[
+                self.camera_names[REACTIVE_FRONT_CAMERA_INDEX]
+            ],
+            image_size=REACTIVE_FRONT_CAMERA_IMAGE_SIZE,
+        )
+        return {
+            "dataset": "KIT-MRT/KITScenes-Multimodal",
+            "geometry_type": "pinhole",
+            "image_size": image_size,
+            "front_camera_index": REACTIVE_FRONT_CAMERA_INDEX,
+            "front_camera_image_size": REACTIVE_FRONT_CAMERA_IMAGE_SIZE,
+            "front_camera_fpn_image_size": image_size,
+            "front_projection": {
+                "matrix": front_projection.tolist(),
+                "type": "pinhole",
+            },
+            "projection": {
+                "matrix": current_projection.tolist(),
+                "type": "pinhole",
+            },
+            "history_projection": {
+                "matrix": history_projection.tolist(),
+                "reference_frame": "current_ego",
+                "type": "pinhole",
+            },
+            "temporal_frame_interval_us": (
+                REACTIVE_BEVFORMER_FRAME_INTERVAL_US
+            ),
+            "temporal_frame_offsets": list(
+                REACTIVE_BEVFORMER_FRAME_OFFSETS
+            ),
+        }
+
     def egomotion_for(self, idx: int) -> tuple[torch.Tensor, torch.Tensor]:
-        ego_history, trajectory, _, _ = self.numeric_for(idx)
-        return ego_history, trajectory
+        scene_id, frame_idx = self._samples[idx]
+        return load_egomotion(
+            self._scene_egomotion[scene_id],
+            frame_idx=frame_idx,
+            history_steps=self._sampling_history_steps,
+            future_steps=self._sampling_future_steps,
+        )
+
+    def trajectory_xy_for(
+        self,
+        idx: int,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Return the exact local-pose trajectory without requiring an HD map."""
+        scene_id, frame_idx = self._samples[idx]
+        return _local_future_to_ego_xy(
+            self._scene_positions_local[scene_id],
+            frame_idx=frame_idx,
+            yaw_rad=float(self._scene_yaws[scene_id][frame_idx]),
+            future_steps=self._sampling_future_steps,
+        )
 
     def geospatial_for(
         self, idx: int
@@ -393,15 +661,26 @@ class KitScenesDataset(Dataset):
         dict[str, float | int],
         np.ndarray,
     ]:
+        if not self.has_geospatial:
+            raise RuntimeError(
+                "absolute geospatial output is unavailable for mapless "
+                "KITScenes data"
+            )
         scene_id, frame_idx = self._samples[idx]
-        ego_history, trajectory = load_egomotion(
-            self._scene_egomotion[scene_id], frame_idx=frame_idx
-        )
+        ego_history, trajectory = self.egomotion_for(idx)
         latlon = self._scene_latlon[scene_id]
-        gps_future = np.asarray(
-            latlon[frame_idx:frame_idx + _FUTURE_TIMESTEPS + 1],
+        observed_gps = np.asarray(
+            latlon[
+                frame_idx:frame_idx + self._sampling_future_steps + 1
+            ],
             dtype=np.float64,
         )
+        gps_future = np.empty(
+            (_FUTURE_TIMESTEPS + 1, 2),
+            dtype=np.float64,
+        )
+        gps_future[: len(observed_gps)] = observed_gps
+        gps_future[len(observed_gps):] = observed_gps[-1]
         expected = (_FUTURE_TIMESTEPS + 1, 2)
         if gps_future.shape != expected:
             raise IndexError(
@@ -447,6 +726,8 @@ class KitScenesDataset(Dataset):
             "matrix": reference.tolist(),
             "reference_frame": "top_lidar_flu",
             "ground_z_m": _TRAJECTORY_GROUND_Z_M,
+            "camera_order": list(self.camera_names),
+            "camera_slots": list(self.camera_slots),
         }
 
     def _load_multiview_frame(
@@ -459,9 +740,26 @@ class KitScenesDataset(Dataset):
             image_size=self.image_size,
         )
 
+    def front_camera_for_row(
+        self,
+        scene_id: str,
+        frame_idx: int,
+        *,
+        image_size: int = REACTIVE_FRONT_CAMERA_IMAGE_SIZE,
+    ) -> torch.Tensor:
+        """Load the native-resolution current Front camera only."""
+        return load_camera_frame(
+            self._sdk.get_sensor_loader(scene_id),
+            frame_idx,
+            camera_names=[
+                self.camera_names[REACTIVE_FRONT_CAMERA_INDEX]
+            ],
+            image_size=image_size,
+        )[0]
+
     def map_for_row(self, scene_id: str, frame_idx: int) -> torch.Tensor:
         """Rasterize one raw uint8 map tile without loading camera images."""
-        if not self.rasterize_map_at_runtime:
+        if self._allow_mapless or not self.rasterize_map_at_runtime:
             return torch.zeros(
                 (3, self.image_size, self.image_size), dtype=torch.uint8
             )
@@ -535,12 +833,8 @@ class KitScenesDataset(Dataset):
         scene_id, frame_idx = self._samples[idx]
         visual_tiles = self._load_multiview_frame(scene_id, frame_idx)
 
-        (
-            egomotion_history,
-            trajectory_target,
-            pose_current,
-            gps_future,
-        ) = self.numeric_for(idx)
+        egomotion_history, trajectory_target = self.egomotion_for(idx)
+        trajectory_xy_m, trajectory_valid = self.trajectory_xy_for(idx)
         sample = KitScenesSample(
             visual_tiles=visual_tiles,
             egomotion_history=egomotion_history,
@@ -548,12 +842,16 @@ class KitScenesDataset(Dataset):
                 _VISUAL_HISTORY_DIM, dtype=torch.float32
             ),
             trajectory_target=trajectory_target,
+            trajectory_xy_m=trajectory_xy_m,
+            trajectory_valid=trajectory_valid,
             scene_id=scene_id,
             frame_idx=frame_idx,
-            pose_current=pose_current,
-            gps_future=gps_future,
             camera_params=self._scene_camera_params[scene_id],
         )
+        if self.has_geospatial:
+            _, _, pose_current, gps_future = self.numeric_for(idx)
+            sample["pose_current"] = pose_current
+            sample["gps_future"] = gps_future
         if self._include_navigation:
             sample["navigation_members"] = (
                 self.navigation_members_for_row(scene_id, frame_idx)

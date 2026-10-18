@@ -50,15 +50,14 @@ logger = logging.getLogger(__name__)
 
 _DISCOVERY_CAMERA = "camera_front_wide_120fov"
 
-# 64 frames × 14-dim compressed scene memory; matches the trajectory
-# planner's visual_history_proj input dim. Currently a zero placeholder
-# until a rolling-buffer encoder writes real summaries each step.
+# 64 frames x 14-dim compressed scene memory; matches the trajectory
+# planner's visual_history_proj input dim. Emitted as zeros.
 _VISUAL_HISTORY_DIM = 896
 
 
 class ClipSample(TypedDict):
-    visual_tiles: torch.Tensor        # (7, 3, H, W) uint8 — 7 raw cameras (native)
-    map_tile: torch.Tensor            # (3, H, W) uint8 — nav-map (zeros; map branch)
+    visual_tiles: torch.Tensor        # (7, 3, H, W) uint8, 7 raw cameras (native)
+    map_tile: torch.Tensor            # (3, H, W) uint8, nav-map (zeros; map branch)
     visual_history: torch.Tensor      # (896,)
     egomotion_history: torch.Tensor   # (256,)
     trajectory_target: torch.Tensor   # (128,)
@@ -70,7 +69,7 @@ class NvidiaAVDataset(Dataset):
     """Dataset where each item is one valid (clip_uuid, sample_idx) pair.
 
     All valid sample indices across all clips are enumerated at construction
-    time. __getitem__ does only I/O — no index arithmetic at call time.
+    time, so __getitem__ does only I/O.
 
     Args:
         data_root: Path to the subset directory.
@@ -91,22 +90,16 @@ class NvidiaAVDataset(Dataset):
     ) -> None:
         self.data_root = Path(data_root)
         self.camera_names = camera_names or CAMERA_NAMES
-        # Reasoning-clip mode (#98): expose get_front_clip(idx) that decodes ONLY
-        # the front camera at the reasoning horizons (0/1/2/3/4 s = current +
-        # wm_num_frames future 1 Hz steps). wm_stride=10 turns the 10 Hz
-        # downsampled egomotion index into 1 Hz horizons — matching L2D. Sample
-        # enumeration is unchanged (egomotion margins 64/64 >> the horizon reach
-        # wm_num_frames*wm_stride=40), so sample_ids still JOIN with data_processing.
+        # Reasoning-clip mode: get_front_clip(idx) decodes only the front camera
+        # at the reasoning horizons (current + wm_num_frames future 1 Hz steps).
+        # wm_stride=10 turns the 10 Hz downsampled egomotion index into 1 Hz.
         self._reasoning_clip_only = reasoning_clip_only
         self._wm_num_frames = wm_num_frames
         self._wm_stride = wm_stride
         self._front_cam = (camera_names or CAMERA_NAMES)[0]
 
-        # This is a pre-extraction source: __getitem__ returns RAW uint8 frames
-        # (no resize/crop/normalize, no timm/backbone dependency). The shard
-        # packer owns the single geometry-aware resize and the pre-extracted
-        # loader owns the single normalize, so the projection ABI targets a known
-        # frame and there is no double-normalize (#77).
+        # __getitem__ returns raw uint8 frames; the shard packer owns the resize
+        # and the pre-extracted loader owns the normalize.
 
         clips = clip_uuids if clip_uuids is not None else self._discover_clip_uuids()
         if not clips:
@@ -155,15 +148,7 @@ class NvidiaAVDataset(Dataset):
         return sorted(p.name.split(".")[0] for p in discovery_dir.glob("*.mp4"))
 
     def _validate_clip(self, clip_uuid: str) -> bool:
-        """Validate a clip before adding it to the sample index.
-
-        Checks:
-        - All expected camera video files and timestamp parquets exist.
-
-        Returns True if the clip passes all checks, False otherwise.
-        """
-
-        # Check camera file completeness
+        """Return True if every camera video and timestamp parquet exists."""
         for cam_name in self.camera_names:
             cam_dir = self.data_root / "camera" / cam_name
             video_path = cam_dir / f"{clip_uuid}.{cam_name}.mp4"
@@ -201,7 +186,6 @@ class NvidiaAVDataset(Dataset):
         self, clip_uuid: str
     ) -> list[tuple[str, int, int]]:
         """Return all valid (clip_uuid, sample_idx, egomotion_timestamp_us) for one clip.
-        Also checks whether all required columns are present in the parquet.
 
         A sample_idx is valid when there are _HISTORY_TIMESTEPS rows behind it
         and _FUTURE_TIMESTEPS rows ahead of it in the downsampled sequence.
@@ -217,7 +201,6 @@ class NvidiaAVDataset(Dataset):
             logger.warning("Egomotion parquet missing for clip %s, skipping.", clip_uuid)
             return []
 
-        # Checking for required columns
         try:
             df = pd.read_parquet(parquet_path, columns=_EGOMOTION_COLUMNS)
         except KeyError as e:
@@ -243,10 +226,10 @@ class NvidiaAVDataset(Dataset):
         if not self._validate_egomotion_timestamps(clip_uuid, df_ds):
             return []
         
-        self._egomotion_dfs[clip_uuid] = df_ds  # cache the downsampled df for later use in __getitem__
+        self._egomotion_dfs[clip_uuid] = df_ds
 
-        min_idx = _HISTORY_TIMESTEPS           # first valid sample_idx
-        max_idx = len(df_ds) - _FUTURE_TIMESTEPS  - 1   # last valid sample_idx (inclusive) corrected by -1
+        min_idx = _HISTORY_TIMESTEPS
+        max_idx = len(df_ds) - _FUTURE_TIMESTEPS  - 1  # inclusive
 
         return [
             (clip_uuid, sample_idx, int(df_ds.iloc[sample_idx]["timestamp"]))
@@ -256,13 +239,11 @@ class NvidiaAVDataset(Dataset):
     def projection_spec(self, image_size: int = 256) -> dict | None:
         """Build a native f-theta projection spec from saved calibration.
 
-        Reads calibration/{intrinsics,extrinsics}.pkl (saved at ingest), builds
-        an FThetaProjection in the camera's NATIVE pixel frame for the camera
-        slot order, and serializes it for the shard manifest. ``image_size`` is
-        accepted for API symmetry but is irrelevant to f-theta: the operator
-        normalizes by the native (W, H), which is exact under any resize. Returns
-        None when calibration is absent, so the dataset falls back to the
-        explicit pseudo path (never a silent real-geometry claim). See #77.
+        Reads calibration/{intrinsics,extrinsics}.pkl (saved at ingest) and
+        serializes an FThetaProjection in the native pixel frame. ``image_size``
+        is accepted for API symmetry only: f-theta normalizes by the native
+        (W, H), which is exact under any resize. Returns None when calibration
+        is absent, so the caller uses the explicit pseudo path.
         """
         import pickle
 
@@ -270,10 +251,7 @@ class NvidiaAVDataset(Dataset):
         intr_path = calib_dir / "intrinsics.pkl"
         extr_path = calib_dir / "extrinsics.pkl"
         if not (intr_path.exists() and extr_path.exists()):
-            # No calibration on disk -> the pipeline runs the explicit pseudo
-            # path. Log it (WARNING) so a run never silently falls back to a
-            # learned prior while a reader assumes real f-theta geometry. The
-            # ingest step writes these pkls when calibration is downloaded.
+            # Warn so a pseudo-geometry run is never mistaken for f-theta.
             logger.warning(
                 "NvidiaAVDataset.projection_spec: no calibration at %s "
                 "(intrinsics.pkl / extrinsics.pkl); using pseudo geometry. Run "
@@ -293,12 +271,11 @@ class NvidiaAVDataset(Dataset):
         return proj.to_spec()
 
     def get_front_clip(self, idx: int) -> list[torch.Tensor]:
-        """Front-camera clip at the reasoning horizons (0/1/2/…s) for sample idx.
+        """Front-camera clip at the reasoning horizons for sample ``idx``.
 
-        Only valid when built with ``reasoning_clip_only=True``. Decodes ONLY the
-        front camera at ``NUM_HORIZONS`` egomotion timestamps (current + future
-        1 Hz steps), so it is a single-camera, few-frame decode. ``idx`` uses the
-        SAME sample index as ``__getitem__``/generate so the sample_id JOIN holds.
+        Only valid with ``reasoning_clip_only=True``. Decodes only the front
+        camera at the current and future 1 Hz egomotion timestamps; ``idx``
+        matches ``__getitem__`` indexing.
         """
         if not self._reasoning_clip_only:
             raise RuntimeError(
@@ -308,8 +285,7 @@ class NvidiaAVDataset(Dataset):
         clip_uuid, sample_idx, _ts = self._samples[idx]
         df_ds = self._egomotion_dfs[clip_uuid]
         n_horizons = self._wm_num_frames + 1  # current + N future
-        # Horizon egomotion timestamps: current + 1 Hz future steps. The valid-
-        # sample margins guarantee sample_idx + N*stride stays in-range.
+        # The valid-sample margins keep sample_idx + N*stride in range.
         rows = [min(sample_idx + h * self._wm_stride, len(df_ds) - 1)
                 for h in range(n_horizons)]
         ts_us = [int(df_ds.iloc[r]["timestamp"]) for r in rows]
@@ -319,26 +295,21 @@ class NvidiaAVDataset(Dataset):
             front_cam=self._front_cam, camera_timestamps_us=cam_ts)
 
     def sample_uid(self, idx: int) -> str:
-        """Global, partition-independent sample id (#121 §3.1).
+        """Global, partition-independent sample id.
 
-        Built from (clip_uuid, sample_idx) — stable regardless of which clips a
-        pod loaded — so the label<->pack JOIN and S3 cache survive clip-range
-        sharding. No `.`/`/` (safe as a WebDataset ``__key__``); clip_uuid is a
-        UUID (hex + `-`).
+        Built from (clip_uuid, sample_idx); contains no `.` or `/`, so it is safe
+        as a WebDataset ``__key__``.
         """
         clip_uuid, sample_idx, _ts = self._samples[idx]
         return f"nv-{UID_SCHEMA_VERSION}-{clip_uuid}-f{sample_idx:06d}"
 
     def split_group_uid(self, idx: int) -> str:
-        """Train/val split unit (#121 §3.1): the whole CLIP (frames within a clip
-        are correlated, so they must not straddle train/val)."""
+        """Train/val split unit: the whole clip, since its frames are correlated."""
         clip_uuid, _sample_idx, _ts = self._samples[idx]
         return f"nv-{clip_uuid}"
 
     def frame_index(self, idx: int) -> int:
-        """Clip-local sample index for sample ``idx`` — used to pick the reasoning
-        1 Hz subset (label iff ``frame_index % stride == 0``), a stable per-sample
-        function so the labeled subset is partition-independent (#121 §3.4d)."""
+        """Clip-local sample index, used to pick the 1 Hz reasoning-label subset."""
         _clip_uuid, sample_idx, _ts = self._samples[idx]
         return sample_idx
 

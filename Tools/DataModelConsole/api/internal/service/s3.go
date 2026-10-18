@@ -48,12 +48,9 @@ var ErrReasoningIntegrity = errors.New("reasoning publication integrity failure"
 // ErrRangeTooLarge is returned when a requested byte range exceeds MaxRangeBytes.
 var ErrRangeTooLarge = errors.New("requested range too large")
 
-// MaxRangeBytes bounds a single range GET against a shard. Both the per-image
-// endpoint and the windowed /blob endpoint stream through StreamTarMemberRange,
-// so enforcing the cap here (not only at the /blob handler) means a crafted
-// offset/size on EITHER endpoint cannot ask the origin to stream a whole
-// multi-hundred-MB / GB shard. A generous multi-frame camera window is well
-// under this; a single JPEG is KB.
+// MaxRangeBytes bounds a single range GET against a shard. It is enforced in
+// StreamTarMemberRange, which both the per-image and /blob endpoints use, so a
+// crafted offset/size on either cannot stream a whole shard.
 const MaxRangeBytes = 32 << 20 // 32 MiB
 
 // MaxOverlayBytes bounds pointer-following artifact reads. A v1 overlay is
@@ -206,13 +203,10 @@ type S3Service struct {
 	publicationMu    sync.Mutex
 	publicationCache map[string]*publicationManifest
 
-	// indexSF single-flights concurrent shard-index builds so a large shard is
-	// scanned from S3 only once even under many simultaneous players. The built
-	// index is NOT held in an in-memory map: those indexes are multi-MB each (a
-	// nvidia shard index is ~5MB of JSON), so caching dozens of them was the OOM
-	// risk this backend removes — DynamoDB is now the cache/source of truth, so
-	// waiters re-read the freshly-written Dynamo item instead. Guarded by
-	// indexMu; keyed by "<dataset>/<version>/<shard>".
+	// indexSF single-flights concurrent shard-index builds so a shard is
+	// scanned from S3 only once. Built indexes are multi-MB, so they are not
+	// kept in memory; waiters re-read the Dynamo item the owner wrote.
+	// Guarded by indexMu; keyed by "<dataset>/<version>/<shard>".
 	indexMu sync.Mutex
 	indexSF map[string]*shardIndexBuild // single-flight in-progress builds
 }
@@ -226,10 +220,8 @@ type cachedVersion struct {
 	at      time.Time
 }
 
-// NewS3Service builds the S3 client from the default AWS credential chain
-// (Pod Identity in-cluster, profile/env locally). st is the DynamoDB-backed
-// cache used as the shard-index source of truth; it may be nil (tests /
-// Dynamo-less deployment), in which case indexes are always built from S3.
+// NewS3Service builds the S3 client from the default AWS credential chain.
+// st is the shard-index cache; when nil, indexes are always built from S3.
 func NewS3Service(ctx context.Context, region, bucket string, presignExpiry time.Duration, st *store.DynamoStore, artifactsBucket ...string) (*S3Service, error) {
 	awsCfg, err := awsconfig.LoadDefaultConfig(ctx, awsconfig.WithRegion(region))
 	if err != nil {
@@ -618,8 +610,7 @@ func episodePathStem(dataset, episode string) string {
 // resolveVersion returns the newest published version for a dataset: the
 // lexicographically-greatest "vX.Y/" prefix under "<dataset>/" that passes the
 // versionHasShards publication gate. Result is cached for versionTTL.
-// Falls back to fallbackVersion when nothing resolves (or S3 errors), so the
-// console still serves the historical path.
+// Falls back to fallbackVersion when nothing resolves or S3 errors.
 func (s *S3Service) resolveVersion(ctx context.Context, dataset string) string {
 	s.versionMu.Lock()
 	if c, ok := s.versionCache[dataset]; ok && time.Since(c.at) < versionTTL {
@@ -636,7 +627,7 @@ func (s *S3Service) resolveVersion(ctx context.Context, dataset string) string {
 	return version
 }
 
-// nowFunc is time.Now indirected so tests can avoid the clock; kept trivial.
+// nowFunc is time.Now indirected so tests can avoid the clock.
 var nowFunc = time.Now
 
 // discoverNewestVersion lists "<dataset>/" version prefixes and returns the
@@ -655,7 +646,6 @@ func (s *S3Service) discoverNewestVersion(ctx context.Context, dataset string) s
 	}
 	versions := make([]string, 0, len(out.CommonPrefixes))
 	for _, cp := range out.CommonPrefixes {
-		// cp.Prefix is "<dataset>/vX.Y/"; extract "vX.Y".
 		v := strings.TrimSuffix(strings.TrimPrefix(aws.ToString(cp.Prefix), prefix), "/")
 		if isVersionDir(v) {
 			versions = append(versions, v)
@@ -673,8 +663,8 @@ func (s *S3Service) discoverNewestVersion(ctx context.Context, dataset string) s
 
 // versionHasShards reports whether <dataset>/<version>/shards/ has a .tar.
 // Canonical v2.1+ publication writes manifest.json last, so those versions stay
-// invisible while partition copies are incomplete. Older, already-published
-// snapshots retain their historical tar-only discovery behavior.
+// invisible while partition copies are incomplete. Older versions without a
+// manifest are discovered by the presence of a .tar alone.
 func (s *S3Service) versionHasShards(ctx context.Context, dataset, version string) bool {
 	if requiresPublicationManifest(version) {
 		_, err := s.loadPublicationManifest(ctx, dataset, version)
@@ -969,9 +959,9 @@ func samplesFromShardIndex(index *model.ShardIndex) []model.Sample {
 }
 
 // StreamTarMember streams the tar from S3 until the requested member is found
-// and returns a reader over that member's content (Phase 1: no tar index, so
-// worst case reads the whole shard; headers of non-matching members are
-// skipped without buffering). Caller must Close the returned closer.
+// and returns a reader over that member's content. Worst case reads the whole
+// shard; non-matching members are skipped without buffering. Caller must Close
+// the returned closer.
 //
 // memberName is matched as "<sampleKey>.<suffix>", e.g. ep0_000064.cam_0.jpg.
 func (s *S3Service) StreamTarMember(ctx context.Context, dataset, version, shard, memberName string) (io.Reader, io.Closer, int64, error) {
@@ -1045,8 +1035,7 @@ func shardGetObjectInput(bucket, key, etag string) *s3.GetObjectInput {
 
 // StreamTarMemberRange fetches exactly one tar member's raw bytes via an S3
 // byte-range GET, using the (offset, size) recorded in the shard index
-// (BuildShardIndex). This turns each image fetch from an O(shard) linear tar
-// scan into a bounded few-KB read. Caller must Close the returned closer.
+// (BuildShardIndex). Caller must Close the returned closer.
 func (s *S3Service) StreamTarMemberRange(ctx context.Context, dataset, version, shard string, offset, size int64) (io.Reader, io.Closer, int64, error) {
 	if offset < 0 || size <= 0 {
 		return nil, nil, 0, fmt.Errorf("invalid range offset=%d size=%d", offset, size)
@@ -1119,8 +1108,8 @@ const (
 	maxInlineMemberBytes = 1 << 20 // 1 MiB
 
 	// Bound index construction before maps, metadata arrays, and the final JSON
-	// encoding can exhaust an API pod. Production shards currently hold about
-	// 1,000 samples and fewer than 16 members per sample.
+	// encoding can exhaust an API pod. Shards hold about 1,000 samples and
+	// fewer than 16 members per sample.
 	maxShardIndexSamples  = 4 << 10
 	maxShardIndexMembers  = 64 << 10
 	maxTarMemberNameBytes = 1 << 10
@@ -1211,11 +1200,8 @@ func (s *S3Service) GetSampleDetail(ctx context.Context, dataset, version, shard
 
 // BuildShardIndex returns the playback index for a shard, read-through
 // DynamoDB: a Dynamo hit is returned directly; on a miss the index is built
-// from the (immutable) shard tar, written to Dynamo, and returned. Concurrent
-// builds are single-flighted so a large shard is scanned from S3 only once even
-// under many simultaneous players; waiters re-check Dynamo after the owner
-// finishes rather than sharing an in-memory copy (those indexes are multi-MB,
-// so holding them in a process map was the OOM risk this backend removes).
+// from the immutable shard tar, written to Dynamo, and returned. Concurrent
+// builds are single-flighted; waiters re-check Dynamo after the owner finishes.
 func (s *S3Service) BuildShardIndex(ctx context.Context, dataset, version, shard string) (*model.ShardIndex, error) {
 	var err error
 	version, _, _, err = s.publishedShardKey(
@@ -1245,7 +1231,6 @@ func (s *S3Service) BuildShardIndex(ctx context.Context, dataset, version, shard
 				return nil, ctx.Err()
 			}
 		}
-		// We own the build.
 		build := &shardIndexBuild{done: make(chan struct{})}
 		s.indexSF[cacheKey] = build
 		s.indexMu.Unlock()

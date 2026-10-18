@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import xml.etree.ElementTree as ET
 from types import SimpleNamespace
 
@@ -13,16 +14,26 @@ from data_parsing.kit_scenes.camera import (
     CAMERA_NAMES,
     NUM_VIEWS,
     compute_camera_projection_matrices,
+    compute_temporal_camera_projection_matrices,
     load_camera_frame,
 )
 from data_parsing.kit_scenes.dataset import (
     KitScenesDataset,
     _heading_cw_from_north,
+    _local_future_to_ego_xy,
     _local_xy_to_absolute_utm,
     _utm32_to_wgs84,
 )
+from data_parsing.kit_scenes.egomotion import load_egomotion
 from data_parsing.kit_scenes import dataset as dataset_module
 from data_parsing.kit_scenes import map as map_module
+from data_parsing.kit_scenes.source import (
+    KITSCENES_STANDARD_TEST_SCENE_COUNT,
+    KITSCENES_STANDARD_TEST_SCENE_UID_SHA256,
+    KITSCENES_STANDARD_VAL_SCENE_COUNT,
+    KITSCENES_STANDARD_VAL_SCENE_UID_SHA256,
+    sdk_split_scene_ids,
+)
 
 
 def _dataset_stub(samples):
@@ -30,9 +41,17 @@ def _dataset_stub(samples):
     dataset._samples = list(samples)
     dataset._wm_num_frames = 4
     dataset._wm_stride = 10
+    dataset._sampling_history_steps = 64
+    dataset._sampling_future_steps = 64
     dataset.camera_names = ["front", "left"]
+    dataset.camera_slots = ["front", "front_left"]
     dataset._scene_egomotion = {
         scene_id: np.zeros((200, 4), dtype=np.float32)
+        for scene_id, _ in samples
+    }
+    dataset._source_hz = 10.0
+    dataset._scene_timestamps_ns = {
+        scene_id: np.arange(200, dtype=np.int64) * 100_000_000
         for scene_id, _ in samples
     }
     return dataset
@@ -43,12 +62,41 @@ def test_camera_view_contract_uses_six_non_redundant_views():
         "camera_base_front_center",
         "camera_ring_front_left",
         "camera_ring_front_right",
-        "camera_ring_rear",
         "camera_ring_rear_left",
+        "camera_ring_rear",
         "camera_ring_rear_right",
     ]
     assert NUM_VIEWS == len(CAMERA_NAMES) == 6
     assert "camera_ring_front" not in CAMERA_NAMES
+
+
+def test_standard_test_split_identity_is_pinned_and_not_test_e2e():
+    test_scene_uids = sorted(
+        f"kitscenes-{scene_id}"
+        for scene_id in sdk_split_scene_ids("test")
+    )
+    test_e2e_scene_ids = set(sdk_split_scene_ids("test_e2e"))
+
+    assert len(test_scene_uids) == KITSCENES_STANDARD_TEST_SCENE_COUNT
+    assert not {
+        scene_uid.removeprefix("kitscenes-")
+        for scene_uid in test_scene_uids
+    }.intersection(test_e2e_scene_ids)
+    assert hashlib.sha256(
+        "\n".join(test_scene_uids).encode("utf-8")
+    ).hexdigest() == KITSCENES_STANDARD_TEST_SCENE_UID_SHA256
+
+
+def test_standard_val_split_identity_is_pinned():
+    val_scene_uids = sorted(
+        f"kitscenes-{scene_id}"
+        for scene_id in sdk_split_scene_ids("val")
+    )
+
+    assert len(val_scene_uids) == KITSCENES_STANDARD_VAL_SCENE_COUNT
+    assert hashlib.sha256(
+        "\n".join(val_scene_uids).encode("utf-8")
+    ).hexdigest() == KITSCENES_STANDARD_VAL_SCENE_UID_SHA256
 
 
 def test_sample_uid_is_stable_across_scene_subsets():
@@ -84,6 +132,24 @@ def test_world_model_ids_and_rows_never_leave_scene():
         (scene, 130),
         (scene, 140),
     ]
+
+
+def test_bevformer_history_rows_use_exact_half_second_intervals():
+    scene = "fd1d1b6b-59bf-4292-8295-5028aa6aa5e3"
+    dataset = _dataset_stub([(scene, 100)])
+
+    assert dataset.bevformer_history_rows(0) == [
+        (scene, 65),
+        (scene, 70),
+        (scene, 75),
+        (scene, 80),
+        (scene, 85),
+        (scene, 90),
+        (scene, 95),
+    ]
+    frame_ids = dataset.bevformer_history_frame_ids(0)
+    assert len(frame_ids) == 7
+    assert all(len(frame) == 2 for frame in frame_ids)
 
 
 def test_heading_conversion_uses_absolute_yaw_not_yaw_rate():
@@ -227,6 +293,114 @@ def test_geographic_output_requires_map_origin(monkeypatch, tmp_path):
         _local_xy_to_absolute_utm(tmp_path, np.zeros((1, 2)))
 
 
+def test_local_future_trajectory_uses_current_ego_frame():
+    positions = np.array([
+        [0.0, 0.0],
+        [1.0, 0.0],
+        [1.0, 2.0],
+        [-1.0, 2.0],
+    ])
+
+    trajectory, valid = _local_future_to_ego_xy(
+        positions,
+        frame_idx=1,
+        yaw_rad=np.pi / 2,
+        future_steps=2,
+    )
+
+    np.testing.assert_allclose(
+        trajectory[:2],
+        [[2.0, 0.0], [2.0, 2.0]],
+        rtol=0.0,
+        atol=1e-6,
+    )
+    np.testing.assert_array_equal(valid[:2], True)
+    np.testing.assert_array_equal(valid[2:], False)
+    np.testing.assert_array_equal(trajectory[2:], 0.0)
+
+
+def test_mapless_track_ignores_an_accidentally_present_map(monkeypatch, tmp_path):
+    scene_id = "scene"
+    loader = SimpleNamespace(
+        scene_path=tmp_path,
+        get_camera_names=lambda: list(CAMERA_NAMES),
+        get_frame_indices=lambda _: list(range(100)),
+        get_reference_timestamps=lambda: list(range(100)),
+    )
+    dataset = object.__new__(KitScenesDataset)
+    dataset.camera_names = list(CAMERA_NAMES)
+    dataset.image_size = 512
+    dataset.rasterize_map_at_runtime = True
+    dataset._sampling_history_steps = 40
+    dataset._sampling_future_steps = 50
+    dataset._allow_mapless = True
+    dataset._include_navigation = False
+    dataset._sdk = SimpleNamespace(
+        get_sensor_loader=lambda _: loader,
+    )
+    dataset._scene_egomotion = {}
+    dataset._scene_poses = {}
+    dataset._scene_positions_local = {}
+    dataset._scene_latlon = {}
+    dataset._scene_yaws = {}
+    dataset._scene_timestamps_ns = {}
+    dataset._scene_camera_params = {}
+    dataset._scene_navigation = {}
+
+    poses = [
+        SimpleNamespace(timestamp_ns=index * 100_000_000)
+        for index in range(100)
+    ]
+    monkeypatch.setattr(
+        dataset_module,
+        "load_ego_poses",
+        lambda _: poses,
+    )
+    monkeypatch.setattr(
+        dataset_module,
+        "poses_to_arrays",
+        lambda _: (
+            np.zeros((100, 4), dtype=np.float32),
+            np.column_stack([
+                np.arange(100, dtype=np.float64),
+                np.zeros(100, dtype=np.float64),
+            ]),
+        ),
+    )
+    monkeypatch.setattr(
+        dataset_module,
+        "pose_yaws",
+        lambda _: np.zeros(100, dtype=np.float64),
+    )
+    monkeypatch.setattr(
+        dataset_module,
+        "compute_camera_projection_matrices",
+        lambda *args, **kwargs: torch.zeros(
+            len(CAMERA_NAMES),
+            3,
+            4,
+        ),
+    )
+    monkeypatch.setattr(
+        dataset_module,
+        "_cached_scene_map",
+        lambda _: pytest.fail("mapless track must not read the map"),
+    )
+    monkeypatch.setattr(
+        dataset_module,
+        "generate_bev_map_tile",
+        lambda **_: pytest.fail("mapless track must not rasterize the map"),
+    )
+
+    samples = dataset._valid_samples_for_scene(scene_id)
+    map_tile = dataset.map_for_row(scene_id, samples[0][1])
+
+    assert samples
+    assert scene_id not in dataset._scene_latlon
+    assert map_tile.shape == (3, 512, 512)
+    assert not torch.any(map_tile)
+
+
 class _CameraLoader:
     def __init__(self):
         self.images = {
@@ -277,6 +451,30 @@ def test_camera_pipeline_resizes_without_normalizing_and_scales_intrinsics():
     assert projection[0, 1, 2] == pytest.approx(16.0)
 
 
+def test_temporal_projection_maps_current_reference_into_history_camera():
+    loader = _CameraLoader()
+    poses = [
+        SimpleNamespace(
+            translation=np.array([float(index), 0.0, 0.0]),
+            rotation=np.array([0.0, 0.0, 0.0, 1.0]),
+        )
+        for index in range(3)
+    ]
+
+    projection = compute_temporal_camera_projection_matrices(
+        loader,
+        poses,
+        reference_frame_idx=2,
+        history_frame_indices=[0, 1],
+        camera_names=["front"],
+        image_size=32,
+    )
+
+    assert projection.shape == (2, 1, 3, 4)
+    assert projection[0, 0, 0, 3] == pytest.approx(320.0)
+    assert projection[1, 0, 0, 3] == pytest.approx(160.0)
+
+
 def test_projection_spec_describes_top_lidar_ground_plane():
     scene = "fd1d1b6b-59bf-4292-8295-5028aa6aa5e3"
     dataset = _dataset_stub([(scene, 64)])
@@ -316,6 +514,76 @@ def test_numeric_contract_emits_current_plus_64_gps_points():
     assert pose["latitude_deg"] == pytest.approx(gps[0, 0])
     assert pose["longitude_deg"] == pytest.approx(gps[0, 1])
     assert pose["heading_deg_cw_from_north"] == pytest.approx(90.0)
+
+
+def test_benchmark_egomotion_padding_preserves_fixed_abi():
+    signals = np.arange(100 * 4, dtype=np.float32).reshape(100, 4)
+
+    ego, target = load_egomotion(
+        signals,
+        frame_idx=40,
+        history_steps=40,
+        future_steps=50,
+    )
+
+    history = ego.numpy().reshape(64, 4)
+    trajectory = target.numpy().reshape(64, 2)
+    np.testing.assert_array_equal(history[:24], 0.0)
+    np.testing.assert_array_equal(history[24:], signals[:40])
+    np.testing.assert_array_equal(
+        trajectory[:50],
+        signals[41:91][:, [1, 3]],
+    )
+    np.testing.assert_array_equal(trajectory[50:], 0.0)
+
+
+def test_default_egomotion_contract_remains_64_by_64():
+    signals = np.arange(150 * 4, dtype=np.float32).reshape(150, 4)
+
+    ego, target = load_egomotion(signals, frame_idx=64)
+
+    np.testing.assert_array_equal(
+        ego.numpy().reshape(64, 4),
+        signals[:64],
+    )
+    np.testing.assert_array_equal(
+        target.numpy().reshape(64, 2),
+        signals[65:129][:, [1, 3]],
+    )
+
+
+def test_benchmark_numeric_contract_repeats_gps_after_paper_horizon():
+    scene = "fd1d1b6b-59bf-4292-8295-5028aa6aa5e3"
+    dataset = _dataset_stub([(scene, 40)])
+    dataset._sampling_history_steps = 40
+    dataset._sampling_future_steps = 50
+    signals = np.arange(120 * 4, dtype=np.float32).reshape(120, 4)
+    dataset._scene_egomotion[scene] = signals
+    latlon = np.column_stack([
+        49.0 + np.arange(120) / 100000,
+        8.0 + np.arange(120) / 100000,
+    ])
+    dataset._scene_latlon = {scene: latlon}
+    dataset._scene_yaws = {scene: np.zeros(120, dtype=np.float64)}
+    dataset._scene_timestamps_ns = {
+        scene: np.arange(120, dtype=np.int64) * 100_000_000
+    }
+
+    ego, target, _, gps = dataset.numeric_for(0)
+
+    np.testing.assert_array_equal(
+        ego.numpy().reshape(64, 4)[:24],
+        0.0,
+    )
+    np.testing.assert_array_equal(
+        target.numpy().reshape(64, 2)[50:],
+        0.0,
+    )
+    np.testing.assert_array_equal(gps[:51], latlon[40:91])
+    np.testing.assert_array_equal(
+        gps[51:],
+        np.repeat(latlon[90][None, :], 14, axis=0),
+    )
 
 
 def test_dataset_geo_iterators_preserve_scene_and_sample_identity():

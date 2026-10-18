@@ -1,11 +1,9 @@
 """Dataset-agnostic camera-calibration helpers shared across parsers.
 
-The projection matrices fed to BEV fusion must be expressed in the *model-input*
-image coordinate frame, i.e. after the backbone's resize/crop transform. This
-module holds the geometry-only utilities (no dataset SDK dependency) that turn a
-raw intrinsic ``K`` into one scaled to the model input, so every dataset parser
-(KITScenes, NVIDIA, future L2D) builds ``P = K_scaled @ T_ego_to_cam[:3, :]``
-consistently.
+The projection matrices fed to BEV fusion must be expressed in the model-input
+image frame, i.e. after the resize/crop transform. ``scale_intrinsic`` turns a
+raw intrinsic ``K`` into one scaled to the model input, so parsers build
+``P = K_scaled @ T_ego_to_cam[:3, :]`` consistently.
 """
 
 from __future__ import annotations

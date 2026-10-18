@@ -1,8 +1,6 @@
 import numpy as np
 import pytest
 import torch
-import sys
-sys.path.append('..')
 
 from model_components.feature_fusion import FeatureFusion
 from model_components.view_fusion import build_view_fusion, FUSION_REGISTRY
@@ -409,13 +407,13 @@ class TestBEVFusion:
 
 
 # ---------------------------------------------------------------------------
-# Runtime-V-dynamic tests (Issue #77): one instance, any camera count
+# Runtime-V-dynamic tests: one instance, any camera count
 # ---------------------------------------------------------------------------
 
 class TestBEVFusionVDynamic:
     """A single BEVViewFusion instance must consume batches of any view count.
 
-    This is the core Issue #77 acceptance: one model, alternating V (e.g. L2D's
+    One model, alternating V (e.g. L2D's
     6 real cams and NVIDIA's 7), no re-instantiation, output always
     [B, embed_dim, bev_h, bev_w], gradients flowing both times.
     """
@@ -429,7 +427,7 @@ class TestBEVFusionVDynamic:
 
     def test_gradients_flow_for_both_view_counts(self, device):
         """bev_queries / value_proj / output_proj must receive gradients at
-        every view count (the #77 gradient-flow criterion)."""
+        every view count."""
         fusion = BEVViewFusion(num_views=6, embed_dim=256, bev_h=8, bev_w=8).to(device)
         cam7 = torch.zeros(1, 7, 3, 4, device=device)
         cam7[..., 0, 0] = 1.0
@@ -458,7 +456,7 @@ class TestBEVFusionVDynamic:
 
 
 # ---------------------------------------------------------------------------
-# Honest-geometry contract (Issue #77): no silent pseudo, no false real claim
+# Honest-geometry contract: no silent pseudo, no false real claim
 # ---------------------------------------------------------------------------
 
 class TestGeometryDeclaration:

@@ -1,4 +1,4 @@
-"""All-branch training-step smoke: Reactive + Reasoning + World Model (#13/#98).
+"""All-branch training-step smoke: Reactive + Reasoning + World Model.
 
 Proves the three branches in the architecture diagram actually train together:
 the COMBINED loss (imitation + JEPA + reasoning) is finite and DECREASES under
@@ -46,7 +46,7 @@ def _reasoning_targets():
 
 def test_world_model_windowed_path_is_differentiable(build_mock_model):
     """The WM windowed path (history_frames given) predicts futures and the JEPA
-    loss flows — the gap where train_il never triggered WM training."""
+    loss flows."""
     model = build_mock_model(
         num_views=V, device=torch.device("cpu"), enable_world_model=True,
     )
@@ -117,8 +117,8 @@ def test_each_branch_receives_gradient(build_mock_model):
     Regression guard: it is easy for a branch's loss to be added to the total yet
     for that branch's parameters to receive no gradient (detach, wrong param
     group, a zero-multiplier gate). Assert the grad-norm of a parameter unique to
-    each branch is finite and > 0 — the same check train_il prints as a one-time
-    probe. Verified on GPU: planner ~21.7, world_model ~16.4, reasoning ~0.88.
+    each branch is finite and > 0, the same check train_il prints as a one-time
+    probe.
     """
     torch.manual_seed(0)
     model = build_mock_model(
@@ -188,9 +188,8 @@ def test_wm_supplies_visual_history_not_zeros(build_mock_model):
 
 def test_world_model_feature_channels_derived_from_backbone(device=torch.device("cpu")):
     """WM JEPA channels must follow the backbone's last stage, not a hardcoded
-    768 (regression: res_net_50's 2048-ch last map crashed the WM). Simulate a
-    non-768 backbone and confirm the WM builds + forwards + reconstructs without
-    a shape error."""
+    768 (ResNet50's last map has 2048 channels). Simulate a non-768 backbone
+    and confirm the WM builds, forwards and reconstructs without a shape error."""
     from unittest.mock import patch
 
     import torch.nn as nn

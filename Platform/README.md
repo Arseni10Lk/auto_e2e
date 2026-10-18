@@ -35,11 +35,9 @@ EKS Auto Mode-based MLOps platform for autonomous driving model training, evalua
 │  └────────────────────────────────────────────────────────────┘   │
 │                                                                    │
 │  ┌────────────────────────────────────────────────────────────┐   │
-│  │  GPU Pool (Karpenter NodePool: g6e.4xlarge, L40S 48GB)      │   │
-│  │                                                             │   │
-│  │  PyTorchJob (IL Training, AMP bf16)                         │   │
-│  │  Eval Jobs (Open-Loop metrics)                              │   │
-│  │  Offline RL (IQL refinement)                                │   │
+│  │  GPU Pools                                                   │   │
+│  │  g6.2xlarge: inference, validation, and canaries             │   │
+│  │  p5en.48xlarge Capacity Block: 4/8-GPU Ray training          │   │
 │  └────────────────────────────────────────────────────────────┘   │
 │                                                                    │
 └───────────────────────────────┬────────────────────────────────────┘
@@ -69,30 +67,136 @@ EKS Auto Mode-based MLOps platform for autonomous driving model training, evalua
 
 ### Why Not CARLA
 
-Originally planned CARLA Closed-Loop Simulation for Phase 5, but abandoned due to:
+CARLA closed-loop simulation is not used because:
 
 1. **Vulkan dependency**: CARLA requires Vulkan ICD, not available in Bottlerocket AMI
 2. **Incompatible with EKS Auto Mode**: nvidia-container-toolkit + Vulkan not supported on Bottlerocket
 3. **EC2 standalone unstable**: Worked on g5.xlarge but communication with EKS pods was unreliable
 4. **Adding Managed NG causes CNI conflicts**: vpc-cni addon makes Auto Mode nodes NotReady
 
-**Alternative**: Offline RL (IQL) — no simulator needed, learns from recorded data. NAVSIM (2D replay closed-loop) planned for future.
+**Alternative**: Offline RL (IQL) — no simulator needed, learns from recorded data.
 
-### GPU Capacity Strategy (ODCR)
+### GPU Capacity Strategy
 
-g6e.4xlarge is difficult to acquire on-demand. Secured via On-Demand Capacity Reservation (ODCR):
+Two targeted `g6.2xlarge` ODCR slots are retained for inference,
+validation, and two-rank canaries. Large nuPlan and multi-dataset training
+uses one eight-GPU P5 Capacity Block purchased for the run window.
+`p5en.48xlarge` is preferred, with `p5.48xlarge` as the fallback when no
+supported p5en offering is available.
+Capacity purchase is an operator action performed before job submission.
+Kubernetes, Karpenter, Kueue, Flyte, CodeBuild, and task Pods never call
+`PurchaseCapacityBlock`; they only consume an already purchased tagged block.
+Do not add purchase triggers for Pending Pods, queued workloads, retries, or
+autoscaling events.
+
+Verify that the retained reservation is targeted, tagged, and has exactly two
+available slots:
 
 ```bash
-# Training GPU (g6e.4xlarge, us-west-2b)
-aws ec2 create-capacity-reservation \
-  --instance-type g6e.4xlarge \
-  --instance-platform Linux/UNIX \
-  --availability-zone us-west-2b \
-  --instance-count 1 \
-  --end-date-type unlimited
+aws ec2 describe-capacity-reservations \
+  --profile autowarefoundation \
+  --region us-west-2 \
+  --filters \
+    Name=tag:Name,Values=auto-e2e-gpu-validation \
+    Name=instance-type,Values=g6.2xlarge \
+  --query 'CapacityReservations[].{Id:CapacityReservationId,Type:InstanceType,Total:TotalInstanceCount,Available:AvailableInstanceCount,Match:InstanceMatchCriteria,State:State}'
 ```
 
-NodePool is pinned to ODCR AZ. Spot is not used (training interruption risk).
+If an existing two-slot reservation is missing the selector tags, attach them
+before applying the NodeClass:
+
+```bash
+aws ec2 create-tags \
+  --profile autowarefoundation \
+  --region us-west-2 \
+  --resources cr-xxxxxxxxxxxxxxxxx \
+  --tags \
+    Key=Name,Value=auto-e2e-gpu-validation \
+    Key=purpose,Value=inference-validation \
+    Key=retention,Value=keep-until-user-cancels
+```
+
+The P5 Ray topology uses whole-GPU allocation rather than MIG:
+
+| Workload | Worker Pods | GPUs per Pod | Ray Train workers |
+|----------|-------------|--------------|-------------------|
+| Validation | 2 | 1 | 2 |
+| Four-GPU training | 1 | 4 | 4 |
+| Eight-GPU training | 1 | 8 | 8 |
+
+Keeping all workers for one trainer in a single Pod preserves intra-instance
+GPU communication. Two independent four-GPU jobs can share the same p5en
+node when Kueue admits both workloads. The p5en queue is reserved for these
+four- and eight-GPU Ray jobs. Legacy single-GPU training and evaluation use
+the retained g6 validation pool.
+
+The p5en queue uses `BestEffortFIFO`. Priority influences admission among
+workloads that fit, but a four-GPU job may be admitted while a higher-priority
+eight-GPU job is blocked on the full-node quota. This avoids leaving half of
+the node idle, at the cost of possible delay for an eight-GPU job. An admitted
+training workload is never preempted to make room for a later workload.
+
+Search for a block without purchasing it:
+
+```bash
+python3 Platform/scripts/p5en_capacity_block.py \
+  --profile autowarefoundation \
+  --region us-west-2 \
+  search \
+  --duration-hours 24 \
+  --start-after 2026-09-02T00:00:00Z \
+  --end-before 2026-09-09T23:59:59Z
+```
+
+The platform CLI accepts Capacity Blocks from one through 14 days. This keeps
+the purchased window below the EKS Auto Mode NodePool lifetime limit.
+
+The CLI requests offerings across all Availability Zones, then keeps only
+`us-west-2a` and `us-west-2c`, where this VPC has private subnets. This
+prevents purchasing a block that the cluster cannot use.
+
+The purchase command defaults to the AWS DryRun path. The maximum fee is an
+independent spend ceiling in addition to the exact expected fee:
+
+```bash
+python3 Platform/scripts/p5en_capacity_block.py \
+  --profile autowarefoundation \
+  --region us-west-2 \
+  purchase \
+  --offering-id cb-xxxxxxxxxxxxxxxxx \
+  --expected-upfront-fee 0000.0000 \
+  --max-upfront-fee 1500.0000 \
+  --confirm "PURCHASE cb-xxxxxxxxxxxxxxxxx 0000.0000" \
+  --duration-hours 24 \
+  --start-after 2026-09-02T00:00:00Z \
+  --end-before 2026-09-09T23:59:59Z
+```
+
+Repeat the same command with `--execute` only after reviewing the selected
+Availability Zone, start time, end time, and upfront fee. The execute path
+performs AWS DryRun again before sending the real purchase request.
+
+Wait until the purchased reservation is active before launching Flyte:
+
+```bash
+python3 Platform/scripts/p5en_capacity_block.py \
+  --profile autowarefoundation \
+  --region us-west-2 \
+  wait-ready
+```
+
+`wait-ready` refuses to return a block with less than 22 hours remaining.
+It accepts a consumed active reservation so a second independent four-GPU
+job can use the other half of an already running p5en node.
+The nuPlan launcher reads the active reservation EndDate and passes it into
+the workflow. The p5en training task has a 20-hour timeout and rejects any
+start with less than 22 hours remaining. Production tasks save an S3
+checkpoint every 256 optimizer steps, so a Flyte retry in the same execution
+can resume from the latest persisted optimizer step. Use a longer Capacity
+Block when the planned training cannot finish inside one 20-hour task window.
+The sequential two-stage 8-GPU workflow needs at least 42 hours remaining:
+20 hours for each task and a 2-hour safety margin before each task starts.
+Purchase a 48-hour or longer block for that workflow.
 
 ### Flyte S3 Authentication Constraint
 
@@ -104,22 +208,22 @@ Flyte's internal storage library (stow/minio-go) uses AWS SDK v1 — does not su
 
 ---
 
-## Pipeline (All Verified E2E)
+## Pipeline
 
 ### Data Ingest
 
 ```
-HuggingFace Dataset → IngestAdapter → WebDataset (.tar shards) → S3
+HuggingFace Dataset → data_ingest → data_processing → WebDataset (.tar shards) → S3
 ```
 
-- **IngestAdapter protocol**: Supports L2D / NVIDIA Physical AI
+- **Sources**: L2D (lerobot), NVIDIA Physical AI (physical_ai_av), KITScenes
 - Decomposes each episode into JPEG frames + egomotion, packs into WebDataset shards
 - Output: `s3://auto-e2e-platform-datasets-{account}/{name}/{version}/shards/train-000000.tar`
 
 ### IL Training (Imitation Learning)
 
 ```
-S3 Shards → PyTorchJob (Kueue managed) → GPU g6e.4xlarge → MLflow
+S3 Shards → Ray Train (Kueue managed) → p5en.48xlarge → MLflow
 ```
 
 - **Kueue**: GPU quota management, priority-based admission
@@ -171,12 +275,15 @@ All resources managed by Terraform under `Platform/infra/`. No hardcoded account
 | `vpc` | VPC, Private/Public Subnets x3 AZ, NAT Gateway |
 | `eks` | EKS Auto Mode, Cluster IAM, Node IAM, OIDC Provider, Pod Identity Agent |
 | `storage` | S3 buckets (datasets, artifacts), Pod Identity associations |
-| `rds` | PostgreSQL (db.t4g.micro), MLflow DB + Flyte DB |
+| `rds` | PostgreSQL (db.r6g.large), MLflow DB + Flyte DB |
 | `mlflow` | Helm release (S3 artifacts, RDS backend) |
 | `flyte` | Helm release (flyte-core), IAM User for S3 access |
 | `kueue` | Helm release, ResourceFlavor/ClusterQueue/LocalQueue |
 | `training-operator` | Kubeflow Training Operator v1.9.3 |
+| `ecr` | ECR repositories for the training, eval, offline-rl, and data-prep images |
 | `codebuild` | Docker image build + Flyte workflow registration (VPC) |
+| `cloudfront` | CloudFront distributions with VPC origins for the internal UIs |
+| `auth-edge` | Cognito user pool + Lambda@Edge auth for CloudFront |
 
 
 ### Deploy
@@ -193,14 +300,26 @@ terraform apply -var-file=environments/dev/terraform.tfvars \
 # Post-apply (kubeconfig + K8s resources)
 aws eks update-kubeconfig --name auto-e2e-platform --region us-west-2 --profile autowarefoundation
 
-# GPU NodePool
-kubectl apply -f Platform/k8s/gpu-nodepool.yaml
+# Default StorageClass (EKS Auto Mode ships none) and the `mlflow` database on
+# RDS (the RDS module creates only `flyteadmin`). post-apply.sh runs both
+# idempotently; manual equivalent of the first:
+kubectl apply -f ../k8s/storage-class.yaml
+
+# GPU NodeClasses and NodePools
+ACCOUNT=$(aws sts get-caller-identity \
+  --profile autowarefoundation \
+  --query Account \
+  --output text)
+sed "s/REPLACE_WITH_AWS_ACCOUNT_ID/${ACCOUNT}/g" \
+  ../k8s/karpenter-nodepools/gpu-nodeclass.yaml | kubectl apply -f -
+kubectl apply -f ../k8s/karpenter-nodepools/gpu-nodepool.yaml
 
 # Kueue config
-kubectl apply -f Platform/k8s/kueue-config.yaml
+kubectl apply -f ../k8s/kueue-config/kueue-objects.yaml
 
-# Flyte S3 patch (required after every terraform apply)
-./Platform/infra/post-apply-phase2.sh
+# StorageClass, mlflow database, quota and reservation checks, training image
+# push, GPU smoke-test Pod
+AWS_PROFILE=autowarefoundation ./post-apply.sh
 ```
 
 ### Cross-Account Migration
@@ -209,7 +328,8 @@ kubectl apply -f Platform/k8s/kueue-config.yaml
 2. Create S3 backend bucket in new account
 3. `terraform init -backend-config=...` to switch backend
 4. `terraform apply` — all resources created in new account
-5. ODCR created manually (depends on AZ/instance-type availability)
+5. Retain the two-slot g6 validation ODCR
+6. Search and explicitly purchase a p5en Capacity Block for each large run
 
 ---
 
@@ -228,30 +348,39 @@ Platform/
 │   │   ├── kueue/                  Helm release
 │   │   ├── training-operator/      kubectl apply (kustomize)
 │   │   ├── codebuild/              Docker build
-│   │   └── ui-exposure/            CloudFront + ALB + Cognito
+│   │   ├── ecr/                    Image repositories
+│   │   ├── cloudfront/             CloudFront + VPC origins
+│   │   └── auth-edge/              Cognito + Lambda@Edge
 │   ├── environments/dev/
 │   ├── main.tf
 │   ├── variables.tf
-│   └── post-apply-phase2.sh
+│   ├── bootstrap.sh                Terraform state backend
+│   └── post-apply.sh
 │
-├── pipelines/                      Flyte workflows
-│   ├── data_ingest/
-│   │   ├── workflow.py
-│   │   └── adapters/               L2D, NVIDIA adapters
-│   ├── training/workflow.py
-│   ├── evaluation/workflow.py
-│   └── full_pipeline.py            Master pipeline
+├── infra-console/                  Data/model console ALB SG + CloudFront
+│
+├── pipelines/                      Flyte workflows and tasks
+│   ├── workflows.py                Ingest, labeling, packing, training, eval
+│   ├── distributed_training.py     Ray multi-GPU training
+│   ├── nuplan_acquisition.py
+│   ├── nuplan_dataset.py
+│   └── overlay*.py                 Trajectory overlays
+│
+├── scripts/                        Operator CLIs (p5en Capacity Blocks, ...)
+├── tests/
+├── buildspec*.yml                  CodeBuild image build, register, launch
 │
 ├── docker/
 │   ├── training/Dockerfile         PyTorch + timm + webdataset + mlflow-skinny
 │   └── data-prep/Dockerfile        lerobot + flytekit + ffmpeg
 │
 ├── helm-values/
-│   ├── mlflow.yaml
-│   └── flyte.yaml
+│   ├── flyte-core-eks.yaml
+│   ├── kueue.yaml
+│   └── mlflow.yaml
 │
 ├── k8s/                            Post-apply K8s manifests
-│   └── (GPU NodePool, Kueue config, TGB)
+│   └── (StorageClass, GPU NodeClass/NodePool, Kueue config, GPU smoke test)
 │
 └── README.md                       (this file)
 ```
@@ -265,7 +394,7 @@ Platform/
 - **ALB/NLB**: Internal only (not internet-facing)
 - **UI access**: CloudFront → VPC Origin → Internal ALB/NLB → Pod
 - **Auth**: Cognito User Pool (deployed on Flyte Console via Lambda@Edge). Credentials
-  are shared with Core Contributors only — ask Ryota Yamada. Never stored in git.
+  are shared with Core Contributors only — ask the maintainers. Never stored in git.
 - **SG design**:
   -   - CloudFront VPC Origin ENI SG → ALB/NLB SG (port 80)
   -   - ALB/NLB SG → EKS Cluster SG (service ports)
@@ -277,14 +406,16 @@ Platform/
 | Resource | Monthly (USD) |
 |----------|-----------|
 | EKS Auto Mode cluster | $73 |
-| g6e.4xlarge ODCR (1 node, 24h) | ~$1,300 |
+| g6.2xlarge validation ODCR (2 slots) | Region price |
+| p5en Capacity Block | Offering-specific upfront fee |
 | System nodes (3x c6a.large) | ~$180 |
-| RDS (db.t4g.micro) | ~$15 |
+| RDS (db.r6g.large) | Region price |
 | NAT Gateway | ~$35 |
 | S3 + CloudFront | ~$5 |
-| **Total** | **~$1,600/mo** |
+| **Fixed subtotal** | **~$293/mo plus RDS, storage and GPU capacity** |
 
-GPU nodes scale to zero when idle. ODCR holds capacity reservation.
+GPU nodes scale to zero when idle. The validation ODCR remains active, while
+p5en capacity exists only for the purchased block window.
 
 ---
 

@@ -1,4 +1,4 @@
-// Command api is the DataModelConsole Phase 1 API server: a read-only
+// Command api is the DataModelConsole API server: a read-only
 // gateway over the platform's S3 datasets/reasoning-label buckets plus
 // MLflow and Flyte Admin proxies. See docs/DESIGN.md.
 package main
@@ -47,10 +47,9 @@ func main() {
 		return
 	}
 
-	// DynamoDB-backed cache: shard-index source of truth (read-through, no
-	// unbounded in-memory map), precomputed reasoning stats, scene-by-label
-	// index. A construction failure is fatal — the S3 service depends on it for
-	// the OOM-safe shard-index path.
+	// DynamoDB-backed cache for shard indexes, reasoning stats, and the
+	// scene-by-label index. Failure is fatal: the S3 service depends on it for
+	// the bounded-memory shard-index path.
 	dynStore, err := store.New(ctx, cfg.AWSRegion, cfg.DynamoTable)
 	if err != nil {
 		slog.Error("init dynamo store", "error", err)
@@ -94,7 +93,7 @@ func main() {
 	r.Use(middleware.Recoverer)
 	r.Use(corsMiddleware(cfg.CORSOrigin))
 
-	// Health endpoints are registered OUTSIDE the throttle/timeout stack: when
+	// Health endpoints are registered outside the throttle/timeout stack: when
 	// 16 tar scans are in flight, kubelet and the ALB health check must still
 	// get an immediate answer, otherwise a throttled probe (429) would restart
 	// the pod / drain the target and amplify an overload into an outage.
@@ -148,11 +147,9 @@ func main() {
 			r.Get("/flyte/executions/{id}", flyteH.Execution)
 		})
 
-		// The shard index scans the entire tar once (a multi-hundred-MB / GB
-		// read for real shards), so it gets a longer timeout; the result is
-		// cached (single-flighted), so only the first request per shard pays it.
-		// The player shows a loading state while this warms. Lower throttle
-		// since each build is heavy.
+		// The shard index scans the entire tar once, so it gets a longer
+		// timeout and a lower throttle; the result is cached (single-flighted),
+		// so only the first request per shard pays it.
 		r.Group(func(r chi.Router) {
 			r.Use(middleware.Throttle(4))
 			r.Use(middleware.Timeout(150 * time.Second))
@@ -169,13 +166,10 @@ func main() {
 			r.Get("/scenes/search", scenesH.Search)
 		})
 
-		// Image GETs are cheap bounded range reads and the player fires many in
-		// parallel per frame; a looser throttle keeps them from starving against
-		// the expensive tar-scan endpoints above (and vice versa). A timeout
-		// bounds the linear-scan FALLBACK path (GetImage with no range params
-		// scans the whole tar for the member) so a member-not-found or a giant
-		// shard cannot tie up a connection indefinitely; a real range GET is
-		// milliseconds, so 30s is generous headroom.
+		// Image GETs are cheap bounded range reads fired in parallel per frame,
+		// so they get their own looser throttle. The timeout bounds the
+		// linear-scan fallback (GetImage without range params scans the whole
+		// tar) so a missing member or giant shard cannot hold a connection.
 		r.Group(func(r chi.Router) {
 			r.Use(middleware.Throttle(64))
 			r.Use(middleware.Timeout(30 * time.Second))

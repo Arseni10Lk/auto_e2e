@@ -31,10 +31,9 @@ TRAJECTORY_DIM = _FUTURE_TIMESTEPS * _NUM_TARGET_SIGNALS    # 128
 MIN_FRAMES = _HISTORY_TIMESTEPS + _FUTURE_TIMESTEPS + 1  # 129
 
 _DT = 0.1  # 10 Hz
-# Physical speed floor (m/s) for the curvature = yaw_rate / speed division.
-# A tiny epsilon (1e-6) is NOT enough: a creeping frame at ~1e-3 m/s with heading
-# jitter passes it yet yields curvature ~100+ rad/m (radius < 1 cm), which enters
-# trajectory_target directly and spikes the loss. Floor at a real crawl speed and
+# Physical speed floor (m/s) for the curvature = yaw_rate / speed division. A
+# tiny epsilon is not enough: a creeping frame with heading jitter would yield
+# curvature of 100+ rad/m in trajectory_target. Floor at a real crawl speed and
 # clamp the magnitude to a physical bound.
 _SPEED_FLOOR = 0.5          # m/s (below this, treat as stationary → curvature 0)
 _MAX_CURVATURE = 0.5        # rad/m (radius >= 2 m; tighter than any road maneuver)
@@ -50,19 +49,15 @@ def _derive_signals(vehicle_states: np.ndarray) -> np.ndarray:
     Returns:
         Float32 array of shape (T, 4): [speed, acceleration_x, yaw_rate, curvature].
 
-    Units (verified against yaak-ai/L2D meta/stats.json): the raw ``speed`` is in
-    KM/H (max ~171.8 → 47.7 m/s) and ``heading`` is in DEGREES (range 0..360).
-    Downstream physics (``integrate_trajectory``) and the curvature formula
-    ``yaw_rate/speed`` both require SI units, so we convert speed → m/s and
-    heading → radians here. Without this the derived yaw_rate is ~57× too large
-    (deg vs rad) and speed ~3.6× too large, which makes the integrated ego
-    trajectory (and hence ADE/FDE) explode.
+    Units (per yaak-ai/L2D meta/stats.json): raw ``speed`` is km/h and
+    ``heading`` is degrees (0..360). Both are converted to SI here because
+    ``integrate_trajectory`` and ``yaw_rate / speed`` require SI units.
     """
     speed = vehicle_states[:, 0] / 3.6                    # km/h → m/s
     heading = np.unwrap(np.radians(vehicle_states[:, 1]))  # degrees → radians
     accel_x = vehicle_states[:, 6]                         # already m/s²
 
-    # yaw_rate = d(heading) / dt, with zero at boundaries
+    # yaw_rate = d(heading) / dt, zero at the first sample
     yaw_rate = np.zeros_like(heading)
     yaw_rate[1:] = np.diff(heading) / _DT
 
@@ -117,10 +112,9 @@ def extract_egomotion(
     history = signals[sample_idx - _HISTORY_TIMESTEPS:sample_idx]  # (64, 4)
     future = signals[sample_idx + 1:sample_idx + 1 + _FUTURE_TIMESTEPS]  # (64, 4)
 
-    # History: all 4 signals
     egomotion_history = torch.from_numpy(history.flatten())  # (256,)
 
-    # Target: acceleration_x and curvature only (indices 1 and 3)
+    # Target: acceleration_x and curvature (indices 1 and 3)
     trajectory_target = torch.from_numpy(
         future[:, [1, 3]].flatten()
     )  # (128,)

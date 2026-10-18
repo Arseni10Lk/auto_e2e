@@ -1,4 +1,4 @@
-"""Training lifecycle and recovered-workflow contracts."""
+"""Training lifecycle workflow contracts."""
 
 from __future__ import annotations
 
@@ -534,25 +534,6 @@ def test_reconstruction_audit_uses_training_group_digest_contract():
     assert signature.parameters["validation_scope"].default == "full"
 
 
-def test_recovered_reconstruction_audit_binds_exact_repack_scope():
-    nodes = (
-        workflows.wf_audit_recovered_kitscenes_target_reconstruction.nodes
-    )
-    assert [
-        getattr(node.flyte_entity, "name", "")
-        for node in nodes
-    ] == [
-        workflows.wf_repack_existing_kitscenes.name,
-        workflows.audit_kitscenes_target_reconstruction.name,
-    ]
-    repack_node, audit_node = nodes
-    audit_bindings = {
-        binding.var: binding.binding.promise
-        for binding in audit_node.bindings
-    }
-    assert audit_bindings["packed_shards"].node_id == repack_node.id
-
-
 def test_reconstruction_audit_allows_only_empty_partitions_without_gps(
     tmp_path,
     monkeypatch,
@@ -780,49 +761,6 @@ def test_navigation_objective_wiring_is_train_only_and_versioned():
     ]
     assert isinstance(training_repeat, ast.Name)
     assert training_repeat.id == "navigation_repeat_policy"
-
-    module = ast.parse(inspect.getsource(workflows))
-    recovered = next(
-        node
-        for node in module.body
-        if isinstance(node, ast.FunctionDef)
-        and node.name == "wf_recovered_kitscenes_full_run"
-    )
-    names = [argument.arg for argument in recovered.args.args]
-    defaults = dict(zip(
-        names[-len(recovered.args.defaults):],
-        recovered.args.defaults,
-        strict=True,
-    ))
-    assert ast.literal_eval(defaults["epochs"]) == 20
-    assert isinstance(defaults["training_objective_version"], ast.Name)
-    assert defaults["training_objective_version"].id == (
-        "ROLLOUT_ALIGNED_OBJECTIVE_VERSION"
-    )
-    assert ast.literal_eval(defaults["enable_junction_sampling"]) is False
-    assert ast.literal_eval(defaults["enable_route_consistency"]) is False
-    train_call = next(
-        call
-        for call in ast.walk(recovered)
-        if isinstance(call, ast.Call)
-        and isinstance(call.func, ast.Name)
-        and call.func.id == "train_il"
-    )
-    train_keywords = {
-        keyword.arg: keyword.value for keyword in train_call.keywords
-    }
-    for field in (
-        "training_objective_version",
-        "enable_junction_sampling",
-        "enable_route_consistency",
-        "route_consistency_weight",
-        "reconstruction_audit",
-        "reconstruction_audit_decision",
-        "reconstruction_audit_rationale",
-        "allow_resume_policy_transition",
-    ):
-        assert isinstance(train_keywords[field], ast.Name)
-        assert train_keywords[field].id == field
 
 
 def test_sharded_full_run_forwards_composite_selector_audit():
@@ -1582,89 +1520,6 @@ def test_registry_records_composite_checkpoint_selection():
             "validation_metric_target_source",
         )
     ] == "logged_xy"
-
-
-def test_recovery_graph_never_calls_ingest_or_cosmos():
-    static_entities = [
-        getattr(node.flyte_entity, "name", "")
-        for node in workflows.wf_recovered_kitscenes_full_run.nodes
-    ]
-    assert static_entities == [
-        workflows.wf_repack_existing_kitscenes.name,
-        workflows.audit_kitscenes_navigation_quality.name,
-        workflows.train_il.name,
-        workflows.evaluate_il_policy.name,
-    ]
-    audit_node = workflows.wf_recovered_kitscenes_full_run.nodes[1]
-    train_node = workflows.wf_recovered_kitscenes_full_run.nodes[2]
-    train_bindings = {
-        binding.var: binding.binding.promise
-        for binding in train_node.bindings
-    }
-    assert (
-        train_bindings["navigation_quality_audit"].node_id
-        == audit_node.id
-    )
-
-    dynamic_tree = ast.parse(
-        inspect.getsource(
-            workflows._map_recovered_kitscenes_artifacts.task_function
-        )
-    )
-    referenced_names = {
-        node.id for node in ast.walk(dynamic_tree)
-        if isinstance(node, ast.Name)
-    }
-    assert "data_processing" in referenced_names
-    assert "data_ingest" not in referenced_names
-    assert "generate_reasoning_labels" not in referenced_names
-
-
-def test_navigation_comparison_graph_reuses_one_repack():
-    nodes = workflows.wf_compare_recovered_kitscenes_navigation.nodes
-    assert [
-        getattr(node.flyte_entity, "name", "")
-        for node in nodes
-    ] == [
-        workflows.wf_repack_existing_kitscenes.name,
-        workflows.evaluate_navigation_records.name,
-        workflows.evaluate_navigation_records.name,
-        workflows.compare_navigation_record_artifacts.name,
-    ]
-    comparison_bindings = {
-        binding.var: binding.binding.promise.node_id
-        for binding in nodes[3].bindings
-    }
-    assert comparison_bindings == {
-        "conditioned_records": nodes[1].id,
-        "baseline_records": nodes[2].id,
-    }
-
-
-def test_shared_pack_maps_bind_optional_strict_count_to_none():
-    tree = ast.parse(
-        inspect.getsource(workflows._map_dataset_partitions.task_function)
-    )
-    pack_partials = []
-    for call in ast.walk(tree):
-        if not (
-            isinstance(call, ast.Call)
-            and isinstance(call.func, ast.Attribute)
-            and call.func.attr == "partial"
-            and call.args
-            and isinstance(call.args[0], ast.Name)
-            and call.args[0].id == "data_processing"
-        ):
-            continue
-        pack_partials.append(call)
-
-    assert len(pack_partials) == 2
-    for partial in pack_partials:
-        keywords = {item.arg: item.value for item in partial.keywords}
-        assert isinstance(
-            keywords["expected_reasoning_label_count"], ast.Constant
-        )
-        assert keywords["expected_reasoning_label_count"].value is None
 
 
 def test_resume_load_keeps_rng_tensors_on_cpu():

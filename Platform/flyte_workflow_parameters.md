@@ -20,8 +20,7 @@ data_ingest ──▶ data_processing ──▶ train_il ──▶ evaluate_il_p
 
 Each dataset is **ingested and processed independently** into its own WebDataset
 shard directory. Training/eval tasks receive **all** datasets' shards as a list and
-**select** the one matching the `dataset` argument (single-dataset training today;
-multi-dataset on one model tracked in [#77](https://github.com/autowarefoundation/auto_e2e/issues/77)).
+**select** the one matching the `dataset` argument (single-dataset training).
 
 ---
 
@@ -45,7 +44,7 @@ multi-dataset on one model tracked in [#77](https://github.com/autowarefoundatio
 
 ### 2. `data_processing`  — image: `auto-e2e/data-prep`
 **Purpose**: Pre-extract aligned frames + egomotion into WebDataset shards.
-Solves [#30](https://github.com/autowarefoundation/auto_e2e/issues/30) (no video decode at training time).
+Training then needs no video decode.
 
 | Aspect | Detail |
 |--------|--------|
@@ -76,11 +75,11 @@ Each dataset stays a **separately-packed** WebDataset.
 | Resources | cpu=4, mem=16Gi, gpu=1 |
 
 **Behavior**:
-- `_select_shard_dir` picks the shard dir whose `manifest.json` matches `dataset`.
+- Merges every non-empty provided shard dir into one DataLoader (manifest `total_samples > 0`; mixed `dataset_version` is rejected). For KITScenes, `_verified_navigation_training_shard_dirs` verifies the required navigation quality audit and keeps only the policy-accepted partitions.
 - `num_views` is **detected from the data** (peek first batch) so the model matches the dataset's camera count.
-- Builds `AutoE2E(backbone, num_views, ...)` (BEV fusion is hardcoded since PR #94; no `fusion_mode` arg), trains with `TrajectoryImitationLoss` (smooth-L1), AdamW, AMP (bf16), grad clipping. A zero `map_input` is fed since shards carry no rendered nav-map yet (#77).
+- Builds `AutoE2E(backbone, num_views, ...)` (always BEV fusion; no `fusion_mode` arg), trains with `TrajectoryImitationLoss` (smooth-L1), AdamW, optional AMP (`amp=False` by default; when enabled, fp16 `torch.amp.autocast("cuda")` with `GradScaler`), grad clipping. Each batch feeds the packed `map_context` / `route_mask` (plus `map_valid` / `route_valid`) to the model.
 - Saves checkpoint (`model_state_dict` + config) and a `metadata.json` capturing full provenance: data, model, training hyperparams, Flyte execution id, docker image.
-- **Does NOT log to MLflow** — that is the eval task's job (single point of truth).
+- Logs to MLflow under the `imitation-learning` experiment (`start_run`, `log_params`, `log_metrics`).
 
 ---
 
@@ -147,7 +146,7 @@ The single place the offline teacher (Cosmos) is called. Params: `raw_data`,
 `cached`), `prompt_version`. Enumerates samples from raw (same parser/episodes as
 `wf_data_processing`, so `sample_id` matches), calls the teacher only on a
 `LabelCache` miss (sample_id-keyed in `REASONING_LABELS_CACHE_BUCKET`, so re-packing
-never re-bills the endpoint, #98/#117), and writes a versioned label artifact
+never re-bills the endpoint), and writes a versioned label artifact
 (whole-record `records.jsonl` for the JOIN + flattened parquet/jsonl for
 analytics). Output: label `FlyteDirectory`.
 
@@ -166,7 +165,7 @@ the cache, so it is not a separate return value).
 `data_ingest + data_processing (all datasets) → train_il → evaluate_il_policy`.
 Same as `wf_full_pipeline` but stops after IL evaluation (no offline RL). Use when
 you only need a supervised checkpoint + open-loop metrics, or when the RL step is
-too memory-hungry at the current BEV resolution (#77). Params: `dataset`,
+too memory-hungry at the current BEV resolution. Params: `dataset`,
 `episodes`, `backbone`, `epochs_il`, `batch_size`, `lr`.
 
 ### `wf_train_offline_rl`
@@ -205,11 +204,10 @@ HF token is **not** a parameter — it is injected from the `hf-token` K8s Secre
 
 | Enum | Options (value) |
 |------|-----------------|
-| `Dataset` | `yaak-ai/L2D`, `nvidia/PhysicalAI-Autonomous-Vehicles` |
+| `Dataset` | `yaak-ai/L2D`, `KIT-MRT/KITScenes-Multimodal`, `nvidia/PhysicalAI-Autonomous-Vehicles` |
 | `Backbone` | `swin_v2_tiny`, `conv_next_v2_tiny`, `res_net_50` |
 
-View fusion is no longer an enum/parameter: BEV fusion is hardcoded in the model
-since PR #94 (concat / cross_attn were removed).
+View fusion is not an enum/parameter: the model always uses BEV fusion.
 
 > When launching via the raw Admin API, pass the **enum value** (e.g.
 > `nvidia/PhysicalAI-Autonomous-Vehicles`), not the enum name.

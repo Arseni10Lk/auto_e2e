@@ -3,12 +3,12 @@ from typing import Any, Dict, Optional
 import torch
 import torch.nn as nn
 
-from .reactive_e2e import ReactiveE2E
+from .reactive_e2e import ReactiveE2E, StatefulCameraFPNCache
 from .world_action_model import RollingHistoryBuffer, WorldActionModel
 
 # Egomotion history is 64 timesteps x [speed, acceleration, yaw_rate, curvature]
 # (see data_parsing/*/egomotion.py — the layout is identical for KITScenes, L2D
-# and PhysicalAI). 
+# and PhysicalAI).
 _EGOMOTION_SIGNALS = 4
 _SPEED_INDEX = 0
 _ACCELERATION_INDEX = 1
@@ -19,12 +19,10 @@ _SPEED_SCALE = 33.0
 # emergency braking manoeuvre.
 _ACCELERATION_SCALE = 8.0
 
-# Geometry arguments from the pre-#77/#107 forward signature. They are no longer
-# parameters, so **kwargs would absorb them and forward on to the planner, which
-# also takes **kwargs — the value is dropped without a word and the run silently
-# falls back to geometry_type="pseudo", a LEARNED PRIOR, not real geometry. A
-# caller passing calibration gets a model that never receives it, and nothing in
-# the logs or the outputs says so. Reject them by name instead.
+# Matrix-style geometry kwargs are not parameters. Without an explicit check
+# **kwargs would absorb them and the run would silently fall back to
+# geometry_type="pseudo", a learned prior rather than real geometry, so they are
+# rejected by name.
 _REMOVED_GEOMETRY_KWARGS = (
     "camera_params", "camera_matrices", "calib", "calibration",
     "intrinsics", "extrinsics", "projection_matrix",
@@ -49,7 +47,6 @@ def normalize_egomotion(egomotion_history):
             f"{_EGOMOTION_SIGNALS} signals per timestep"
         )
 
-    # One broadcast multiply over the whole history. 
     scales = torch.ones(
         _EGOMOTION_SIGNALS,
         dtype=egomotion_history.dtype,
@@ -74,22 +71,24 @@ class AutoE2E(nn.Module):
                  visual_history_dim=896,
                  map_type="rasterized", map_context_channels=3,
                  route_channels=2, enable_route_conditioning=True,
+                 route_encoder_hidden_channels=96,
                  map_fusion_mode="residual", map_fusion_kwargs=None,
                  temporal_memory_mode="no_memory", temporal_memory_kwargs=None,
                  planner_mode="bezier", planner_kwargs=None,
                  enable_world_model=False, world_model_kwargs=None,
                  enable_reasoning=False, reasoning_mode="none",
-                 reasoning_kwargs: Optional[Dict[str, Any]] = None):
+                 reasoning_kwargs: Optional[Dict[str, Any]] = None,
+                 enable_bev_segmentation=False,
+                 bev_segmentation_classes=8,
+                 enable_route_reconstruction=False,
+                 auxiliary_output_size=None):
         super(AutoE2E, self).__init__()
 
-        # Reactive model which runs at 10Hz and processes multi-camera inputs
-        # a rendered map image and egomotion history to predict a driving trajectory
-        # to reach the near-horizon navigational goal.
-        #
-        # The reasoning branch lives INSIDE ReactiveE2E (after TemporalMemory,
-        # where ego_ctx is available) rather than as a pre-ReactiveE2E history
-        # rewrite — so the head sees the effective visual/ego context and the
-        # planner coupling is a first-class planner argument (#98).
+        # Reactive model which runs at 10Hz and processes multi-camera inputs,
+        # a rendered map image and egomotion history to predict a driving
+        # trajectory to reach the near-horizon navigational goal. The reasoning
+        # branch lives inside ReactiveE2E, after TemporalMemory, so it sees the
+        # effective visual/ego context.
         self.Reactive_E2E = ReactiveE2E(backbone=backbone, num_views=num_views, embed_dim=embed_dim,
                  is_pretrained=is_pretrained,
                  image_feature_size=image_feature_size, view_fusion_kwargs=view_fusion_kwargs,
@@ -100,37 +99,36 @@ class AutoE2E(nn.Module):
                  map_context_channels=map_context_channels,
                  route_channels=route_channels,
                  enable_route_conditioning=enable_route_conditioning,
+                 route_encoder_hidden_channels=route_encoder_hidden_channels,
                  map_fusion_mode=map_fusion_mode, map_fusion_kwargs=map_fusion_kwargs,
                  temporal_memory_mode=temporal_memory_mode, temporal_memory_kwargs=temporal_memory_kwargs,
                  planner_mode=planner_mode, planner_kwargs=planner_kwargs,
                  enable_reasoning=enable_reasoning, reasoning_mode=reasoning_mode,
-                 reasoning_kwargs=reasoning_kwargs)
+                 reasoning_kwargs=reasoning_kwargs,
+                 enable_bev_segmentation=enable_bev_segmentation,
+                 bev_segmentation_classes=bev_segmentation_classes,
+                 enable_route_reconstruction=enable_route_reconstruction,
+                 auxiliary_output_size=auxiliary_output_size)
         self.enable_reasoning = enable_reasoning
 
         # World Action Model (slow, ~1Hz): encodes the multi-camera history into
         # the Encoded Visual History (fed to the reactive planner) and predicts
-        # future visual features (JEPA). Reuses the reactive backbone (one shared
-        # backbone; the JEPA target is a frozen copy of it). Opt-in (default OFF)
-        # so the reactive-only default is byte-identical.
+        # future visual features (JEPA). Reuses the reactive backbone; the JEPA
+        # target is a frozen copy of it. Opt-in, off by default.
         self.World_Action_Model_E2E: Optional[WorldActionModel] = None
         self.visual_history_buffer: Optional[RollingHistoryBuffer] = None
         if enable_world_model:
             wmk = dict(world_model_kwargs or {})
             history_len = wmk.pop("history_len", 4)
             wmk.setdefault("view_aggregator", "attention")
-            # The JEPA operates on the backbone's LAST feature map, whose channel
+            # The JEPA operates on the backbone's last feature map, whose channel
             # count is backbone-dependent (swin_v2_tiny=768, res_net_50=2048, ...).
-            # Derive it from the shared backbone instead of defaulting to 768,
-            # otherwise a non-768 backbone crashes in FrameEncoder.proj / the
-            # feature-reconstruction shape check.
             wmk.setdefault(
                 "feature_channels",
                 self.Reactive_E2E.Backbone.feature_channels[-1],
             )
-            # frame_embed_dim * history_len MUST equal visual_history_dim, else the
-            # WM's aggregated history (history_len * frame_embed_dim) mismatches the
-            # planner's visual_history_dim (896) and the planner rejects it. Reject
-            # a non-dividing history_len rather than silently produce e.g. 895.
+            # frame_embed_dim * history_len must equal the planner's
+            # visual_history_dim.
             if visual_history_dim % history_len != 0:
                 raise ValueError(
                     f"history_len ({history_len}) must divide visual_history_dim "
@@ -138,9 +136,8 @@ class AutoE2E(nn.Module):
                     f"{visual_history_dim % history_len}. Pick a divisor of "
                     f"{visual_history_dim} (e.g. 1,2,4,7,8)."
                 )
-            # num_future_steps defaults to history_len (its documented default);
-            # leaving it at a hardcoded 4 would IndexError in jepa_loss when the
-            # packed future window has a different length.
+            # jepa_loss indexes the packed future window, whose length follows
+            # history_len.
             wmk.setdefault("num_future_steps", history_len)
             self.World_Action_Model_E2E = WorldActionModel(
                 backbone=self.Reactive_E2E.Backbone,
@@ -159,13 +156,33 @@ class AutoE2E(nn.Module):
             self.visual_history_buffer = RollingHistoryBuffer(
                 history_len=self.visual_history_buffer.history_len)
 
+    def create_stateful_camera_fpn_cache(
+        self,
+    ) -> StatefulCameraFPNCache:
+        """Create an inference cache for one BEVFormer T8 camera stream."""
+        return self.Reactive_E2E.create_stateful_camera_fpn_cache()
 
     def forward(self, camera_tiles, map_context, visual_history,
                 egomotion_history, route_mask=None, map_valid=None,
                 route_valid=None,
                 projection=None, geometry_type=None, image_transform=None,
+                camera_history_tiles=None, history_projections=None,
+                camera_fpn_cache=None,
+                camera_fpn_stream_ids=None,
+                camera_fpn_timestamps_us=None,
+                front_camera_tile=None, front_camera_fpn_tile=None,
+                front_camera_fpn_available=None,
+                front_projection=None,
+                front_image_transform=None,
                 mode="train", trajectory_target=None,
-                history_frames=None, future_frames=None, **kwargs):
+                history_frames=None, future_frames=None,
+                return_auxiliary=False,
+                precomputed_image_bev=None,
+                return_image_bev=False,
+                compute_bev_segmentation=True,
+                compute_route_reconstruction=True,
+                bev_only=False,
+                **kwargs):
         """
         Run the full autonomous-driving pipeline.
 
@@ -175,8 +192,7 @@ class AutoE2E(nn.Module):
             * Train mode with the World Model and/or the reasoning branch on →
               ``(trajectory, aux_outputs)`` where ``aux_outputs`` is a dict with
               ``"future_state_pred"`` (World Model) and/or ``"reasoning_pred"``
-              (HorizonReasoningPrediction). A dict avoids a positional-tuple
-              that grows with every optional branch (#98 Task 4.2).
+              (HorizonReasoningPrediction).
 
         Args:
             camera_tiles: (B, V, 3, H, W) — V real camera images (the nav-map is
@@ -195,6 +211,22 @@ class AutoE2E(nn.Module):
             geometry_type: Optional explicit geometry label ("pinhole",
                 "rectified_pinhole", "ftheta", "pseudo") passed to BEV fusion.
             image_transform: Optional ImageTransform for the model-input frame.
+            front_camera_tile: Optional native-resolution front image tensor.
+            front_camera_fpn_tile: Optional base-resolution Front image packed
+                identically to historical Front frames for cache insertion.
+            front_camera_fpn_available: Per-sample validity for the exact
+                base-resolution Front companion.
+            front_projection: Optional one-view projection for the native front.
+            camera_history_tiles: Optional seven-frame camera history for T8.
+            history_projections: Optional current-ego-aligned history geometry.
+            camera_fpn_cache: Optional per-stream stateful T8 FPN cache.
+            camera_fpn_stream_ids: Ordered scene or stream identity per sample.
+            camera_fpn_timestamps_us: Source timestamps sampled exactly every
+                500 ms. Do not synthesize continuity across dropped frames.
+            precomputed_image_bev: Optional detached image BEV from an earlier
+                inference pass over the same camera inputs.
+            return_image_bev: Return the detached image BEV for route-only
+                counterfactual inference.
             mode: "train" also returns aux branch outputs for their losses.
 
         Returns:
@@ -219,25 +251,21 @@ class AutoE2E(nn.Module):
                 f"geometry_type='pseudo' — a learned spatial prior, not your calibration."
             )
 
-        # Scale the raw speed and acceleration values into a sensible range for
-        # the model. Rebinds rather than mutating: the caller's batch is not
-        # ours to write to (see normalize_egomotion).
+        # Rebinds rather than mutating so the caller's batch is left untouched.
         egomotion_history = self.normalize_egomotion(egomotion_history)
 
         # World Action Model (1 Hz): produce the Encoded Visual History fed to the
         # reactive planner + reasoning branch, and (in training) the predicted
         # future feature maps for the JEPA loss. Two mutually exclusive paths:
         #
-        #  A. WINDOWED TRAINING path (preferred when ``history_frames`` is given):
-        #     stateless and fully differentiable — encode the past window, pool it
-        #     into visual_history, predict the future. No rolling buffer, so it is
-        #     safe under shuffled batch training. This is the path train_il uses to
-        #     make JEPA loss actually flow (see #13); it replaces the caller's
-        #     visual_history so the planner is conditioned on the WM history.
-        #  B. ROLLING-BUFFER inference/rollout path (no window supplied): pushes a
-        #     DETACHED per-frame embedding into a per-sequence FIFO. Inference /
-        #     closed-loop only — NOT safe to share across shuffled batches; call
-        #     ``reset_visual_history()`` between independent sequences.
+        #  A. Windowed training path (when ``history_frames`` is given):
+        #     stateless and differentiable, so it is safe under shuffled batch
+        #     training. It replaces the caller's visual_history so the planner is
+        #     conditioned on the WM history.
+        #  B. Rolling-buffer inference/rollout path: pushes a detached per-frame
+        #     embedding into a per-sequence FIFO. Not safe to share across
+        #     shuffled batches; call ``reset_visual_history()`` between
+        #     independent sequences.
         future_state_pred = None
         if self.World_Action_Model_E2E is not None:
             wam = self.World_Action_Model_E2E
@@ -246,24 +274,17 @@ class AutoE2E(nn.Module):
                 # (or [B, T, 3, H, W]) oldest→newest, current frame last.
                 history_concat = wam.encode_history(history_frames)
                 visual_history = wam.aggregate_history(history_concat)
-                # The WM yields an AGGREGATED (2-D [B, dim]) visual history. Keep
-                # egomotion_history at the SAME rank so a downstream temporal
-                # memory (e.g. one_hz) that branches on rank does not return one
-                # 2-D and one 3-D context and break the planner. Collapse a
-                # sequence egomotion to its current (last) step.
+                # The WM yields an aggregated 2-D [B, dim] visual history. Keep
+                # egomotion_history at the same rank, since a rank-branching
+                # temporal memory (e.g. one_hz) needs both inputs to agree.
                 if egomotion_history.ndim == 3:
                     egomotion_history = egomotion_history[:, -1]
-                # JEPA trains the WM through the NON-detached visual_history
-                # (predict_future must see gradients into the aggregator/encoder).
+                # JEPA trains the WM through the non-detached visual_history.
                 if mode == "train":
                     future_state_pred = wam.predict_future(visual_history)
-                # The planner reads a STOP-GRADIENT world-model representation:
-                # detach so the trajectory loss does not create a second,
-                # non-stationary gradient path into the WM (the WM is shaped by
-                # JEPA only). Standard world-model-conditioned-policy setup, and
-                # it matches the inference rolling-buffer path which also detaches
-                # (line ~171). Combined with the zero-init visual_history_proj this
-                # makes the WM branch a stable, strictly-additive planner input.
+                # The planner reads a stop-gradient WM representation so the
+                # trajectory loss does not add a second gradient path into the
+                # WM, which is shaped by JEPA only. This matches path B.
                 visual_history = visual_history.detach()
             else:
                 # B. Rolling-buffer path. Encode the current 1 Hz multi-view frame;
@@ -272,17 +293,13 @@ class AutoE2E(nn.Module):
                 self.visual_history_buffer.push(visual_embedding.detach())  # type: ignore[union-attr]
                 visual_history = wam.aggregate_history(
                     self.visual_history_buffer.visual_history())  # type: ignore[union-attr]
-                # Same rank-collapse as path A: visual_history is now 2-D [B,dim],
-                # so a rank-branching temporal memory (one_hz) must not get a 3-D
-                # egomotion and a 2-D visual (mislabelled / broadcast crash).
+                # Same rank-collapse as path A.
                 if egomotion_history.ndim == 3:
                     egomotion_history = egomotion_history[:, -1]
                 if mode == "train":
                     future_state_pred = wam.predict_future(visual_history)
 
-        # The reasoning branch runs INSIDE ReactiveE2E (after TemporalMemory).
-        # In train mode with reasoning on, ReactiveE2E returns
-        # (trajectory, reasoning_pred); otherwise just the trajectory.
+        # ReactiveE2E returns (trajectory, aux) when it has auxiliary outputs.
         reactive_out = self.Reactive_E2E(
             camera_tiles, map_context, visual_history, egomotion_history,
             route_mask=route_mask,
@@ -290,27 +307,40 @@ class AutoE2E(nn.Module):
             route_valid=route_valid,
             projection=projection, geometry_type=geometry_type,
             image_transform=image_transform,
-            mode=mode, trajectory_target=trajectory_target, **kwargs,
+            camera_history_tiles=camera_history_tiles,
+            history_projections=history_projections,
+            camera_fpn_cache=camera_fpn_cache,
+            camera_fpn_stream_ids=camera_fpn_stream_ids,
+            camera_fpn_timestamps_us=camera_fpn_timestamps_us,
+            front_camera_tile=front_camera_tile,
+            front_camera_fpn_tile=front_camera_fpn_tile,
+            front_camera_fpn_available=front_camera_fpn_available,
+            front_projection=front_projection,
+            front_image_transform=front_image_transform,
+            mode=mode,
+            return_auxiliary=return_auxiliary,
+            precomputed_image_bev=precomputed_image_bev,
+            return_image_bev=return_image_bev,
+            compute_bev_segmentation=compute_bev_segmentation,
+            compute_route_reconstruction=compute_route_reconstruction,
+            bev_only=bev_only,
+            trajectory_target=trajectory_target,
+            **kwargs,
         )
-        reasoning_pred = None
-        if self.enable_reasoning and mode == "train":
-            trajectory, reasoning_pred = reactive_out
+        reactive_aux = {}
+        if isinstance(reactive_out, tuple):
+            trajectory, reactive_aux = reactive_out
         else:
             trajectory = reactive_out
 
-        # Assemble aux outputs (dict, not a growing positional tuple). The WM
-        # keeps its future_frames alongside the prediction so the training loop
-        # can call jepa_loss(future_state_pred, future_frames) without re-plumbing
-        # the frames itself.
-        if mode == "train" and (
-            self.World_Action_Model_E2E is not None or reasoning_pred is not None
-        ):
-            aux_outputs = {
+        # future_frames travels with the prediction so the training loop can
+        # call jepa_loss(future_state_pred, future_frames) directly.
+        if mode == "train" and self.World_Action_Model_E2E is not None:
+            reactive_aux.update({
                 "future_state_pred": future_state_pred,
                 "future_frames": future_frames,
-                "reasoning_pred": reasoning_pred,
-            }
+            })
+        if reactive_aux:
+            aux_outputs = reactive_aux
             return trajectory, aux_outputs
         return trajectory
-        
-    

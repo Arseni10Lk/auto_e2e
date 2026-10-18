@@ -5,7 +5,7 @@ platform. Organized by **what you want to do**, so you can jump straight to your
 
 - **Flyte Console**: https://d1fk8c95f6ice9.cloudfront.net/console
 - **Login**: Cognito-protected. Credentials are shared with **Core Contributors only** —
-  ask **Ryota Yamada** for access. You will be redirected to a Cognito login page first.
+  ask the maintainers for access. You will be redirected to a Cognito login page first.
 - **Project**: `auto-e2e` · **Domain**: `development`
 
 > For task internals and parameters, see `flyte_workflow_parameters.md`.
@@ -19,10 +19,10 @@ platform. Organized by **what you want to do**, so you can jump straight to your
 
 1. Open https://d1fk8c95f6ice9.cloudfront.net/console
 2. You are redirected to the Cognito hosted login. Sign in with the credentials
-   provided to Core Contributors (ask **Ryota Yamada** — they are never stored in git).
+   provided to Core Contributors (ask the maintainers — they are never stored in git).
 3. You land on the Flyte Console home. Top-left, make sure the **Project** selector
    shows **`auto-e2e`** and the **Domain** selector shows **`development`**.
-   (Other Flyte sample projects were archived, so `auto-e2e` should be the only one.)
+   `auto-e2e` is the only active project.
 4. The left sidebar has three main sections you will use:
    - **Workflows** — the DAGs you can launch
    - **Tasks** — individual reusable steps
@@ -57,9 +57,8 @@ platform. Organized by **what you want to do**, so you can jump straight to your
    - **`backbone`** (dropdown): `swin_v2_tiny` / `conv_next_v2_tiny` / `res_net_50`
    - **`epochs_il`**, **`epochs_rl`**, **`batch_size`**, **`lr`**, **`tau`**, **`beta`**, **`episodes`** — numbers, defaults are fine for a smoke run.
 
-   There is no `fusion_mode` input: BEV fusion is hardcoded in the model since
-   PR #94 (concat / cross_attn were removed). To run IL without the memory-hungry
-   offline-RL step, launch **`workflows.wf_ingest_train_eval`** instead.
+   There is no `fusion_mode` input: the model always uses BEV fusion. To run IL
+   without the memory-hungry offline-RL step, launch **`workflows.wf_ingest_train_eval`** instead.
    - **No `hf_token` field** — the HF token is injected from a Kubernetes Secret.
 4. Click **Launch**. You are taken to the new **execution** page.
 
@@ -360,11 +359,14 @@ does not load the model checkpoint or run inference again.
    pointer.
 3. Keep the immutable dataset-manifest and overlay-manifest S3 URIs used to
    resolve those two objects.
-4. In Flyte Console, launch `wf_export_trajectory_report`.
-5. Set `shard`, `overlay`, `dataset_manifest`, and `overlay_manifest` to those
-   four immutable S3 URIs. Optionally set `selection_manifest`, `scene_uids`,
-   `seed_index`, `camera_index`, and `max_frames_per_scene`.
-6. Download the returned `FlyteDirectory`, which contains per-scene MP4 files,
+4. From that shard's dataset-manifest entry, copy the referenced immutable
+   `rig/{sha256}.json` URI.
+5. In Flyte Console, launch `wf_export_trajectory_report`.
+6. Set `shard`, `overlay`, `dataset_manifest`, `overlay_manifest`, and
+   `rig_projection` to those five immutable S3 URIs. Optionally set
+   `selection_manifest`, `scene_uids`, `seed_index`, `camera_index`, and
+   `max_frames_per_scene`.
+7. Download the returned `FlyteDirectory`, which contains per-scene MP4 files,
    thumbnails, metrics, and `manifest.json`.
 
 The task joins predictions by `sample_uid`; verifies dataset/model/request
@@ -404,8 +406,8 @@ n1 data_processing(L2D)    n3 data_processing(NVIDIA) ← run in parallel
 - **Secrets never appear in the UI**: the HF token is injected from the `hf-token`
   Kubernetes Secret and is not a workflow input, so it will not show up in any
   Inputs panel.
-- **Archived clutter**: the default Flyte sample projects (`flytesnacks`, etc.) were
-  archived so only `auto-e2e` is visible.
+- **Project list**: the default Flyte sample projects (`flytesnacks`, etc.) are
+  archived, so only `auto-e2e` is visible.
 
 ---
 
@@ -423,7 +425,7 @@ n1 data_processing(L2D)    n3 data_processing(NVIDIA) ← run in parallel
 | Publish existing shards → overlays | `wf_publish_and_precompute_overlays` | `shards`, immutable model/runtime identities |
 | Publish existing shards only | `wf_publish_dataset_snapshot` | `shards`, `published_dataset`, `dataset_version` |
 | Precompute an already identified snapshot | `wf_precompute_overlays` | `shards`, model version, dataset manifest digest |
-| Export an overlay shard as MP4 | `wf_export_trajectory_report` | matching immutable `shard`, `overlay`, dataset-manifest, and overlay-manifest URIs |
+| Export an overlay shard as MP4 | `wf_export_trajectory_report` | matching immutable `shard`, `overlay`, dataset-manifest, overlay-manifest, and rig-projection URIs |
 | Train IL from existing shards | `wf_train_il` | `shards` list, `dataset` |
 | Refine with Offline RL | `wf_train_offline_rl` | `pretrained`, `il_metadata`, `shards` |
 | See metrics | (MLflow, not Flyte) | experiment `imitation-learning` / `offline-rl` |

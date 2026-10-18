@@ -129,7 +129,7 @@ export async function listDatasetVersions(
 
 // versionParam builds the "&version=" / "?version=" suffix for an optional
 // pinned dataset version. Empty/undefined means "let the API auto-resolve the
-// newest version" (the historical behavior), so nothing is appended.
+// newest version", so nothing is appended.
 function versionParam(version: string | undefined, sep: "?" | "&"): string {
   return version ? `${sep}version=${encodeURIComponent(version)}` : "";
 }

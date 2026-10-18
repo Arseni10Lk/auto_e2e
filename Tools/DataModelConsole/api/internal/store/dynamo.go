@@ -136,8 +136,7 @@ type ddbAPI interface {
 
 // DynamoStore is the DynamoDB-backed cache: shard indexes, precomputed stats,
 // and the scene-by-label search index. It is the source of truth for cached
-// artifacts so a pod restart or a second replica reuses them (no unbounded
-// in-memory map).
+// artifacts so a pod restart or a second replica reuses them.
 type DynamoStore struct {
 	client ddbAPI
 	table  string
@@ -173,13 +172,9 @@ func New(ctx context.Context, region, table string) (*DynamoStore, error) {
 // Table returns the configured table name (for logging/diagnostics).
 func (s *DynamoStore) Table() string { return s.table }
 
-// ---------------------------------------------------------------------------
-// Shard index (read-through cache; gzip-compressed payload).
-//
-// A shard index is large (a real shard's index is multi-MB of JSON), well over
-// DynamoDB's 400 KB item limit, so the payload is gzip-compressed before store
-// and inflated on read (l2d ~1.7MB->77KB, nvidia ~5.2MB->206KB, both fit).
-// ---------------------------------------------------------------------------
+// Shard indexes are multi-MB of JSON, well over DynamoDB's 400 KB item limit,
+// so the payload is gzip-compressed before store and inflated on read
+// (l2d ~1.7MB->77KB, nvidia ~5.2MB->206KB, both fit).
 
 // GetShardIndex returns a cached shard index, or ErrNotFound on a miss.
 func (s *DynamoStore) GetShardIndex(ctx context.Context, dataset, version, shard string) (*model.ShardIndex, error) {
@@ -259,9 +254,9 @@ func (s *DynamoStore) getShardIndex(
 	if err := json.Unmarshal(plain, &idx); err != nil {
 		return nil, fmt.Errorf("decode shard index payload: %w", err)
 	}
-	// The DynamoDB key is authoritative. Older cache entries did not always
-	// persist these response fields, so populate them before sharing the
-	// decoded pointer with concurrent callers.
+	// The DynamoDB key is authoritative and cached entries may lack these
+	// response fields, so populate them before sharing the decoded pointer
+	// with concurrent callers.
 	idx.Version = version
 	idx.Shard = shard
 	return &idx, nil
@@ -307,10 +302,6 @@ func (s *DynamoStore) PutShardIndex(ctx context.Context, dataset, version, shard
 	}
 	return nil
 }
-
-// ---------------------------------------------------------------------------
-// Precomputed reasoning stats.
-// ---------------------------------------------------------------------------
 
 // GetStats returns a cached stats blob and its computed_at, or ErrNotFound.
 func (s *DynamoStore) GetStats(ctx context.Context, dataset, version, promptVersion string) (model.ReasoningStatsBlob, string, error) {
@@ -843,10 +834,6 @@ func (s *DynamoStore) GetReasoningSampleLookup(
 	}, nil
 }
 
-// ---------------------------------------------------------------------------
-// Scene-by-label search index.
-// ---------------------------------------------------------------------------
-
 // PutSceneLabels writes the scene-by-label search rows for one (dataset,
 // promptVersion) in batches of 25 (BatchWriteItem's cap), retrying any
 // UnprocessedItems. Idempotent: re-writing the same (field,value,sample_id) is
@@ -1076,7 +1063,6 @@ func (s *DynamoStore) queryScenesByLabel(
 			ExclusiveStartKey: startKey,
 		}
 		if limit > 0 {
-			// Fetch at most the remaining needed rows this page.
 			in.Limit = aws.Int32(int32(limit - len(ids)))
 		}
 		out, err := s.client.Query(ctx, in)
@@ -1371,10 +1357,6 @@ func (s *DynamoStore) GetGeoRecord(ctx context.Context, dataset, version string)
 	return &record, nil
 }
 
-// ---------------------------------------------------------------------------
-// helpers
-// ---------------------------------------------------------------------------
-
 func optionalSHA256(values []string) (string, error) {
 	if len(values) > 1 {
 		return "", fmt.Errorf("expected at most one dataset manifest digest")
@@ -1501,5 +1483,5 @@ func gunzipLimited(b []byte, limit int) ([]byte, error) {
 	return plain, nil
 }
 
-// nowRFC3339 is time.Now indirected (kept trivial) so timestamps are UTC RFC3339.
+// nowRFC3339 returns the current UTC time in RFC3339.
 func nowRFC3339() string { return time.Now().UTC().Format(time.RFC3339) }

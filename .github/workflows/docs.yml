@@ -19,12 +19,10 @@ jobs:
         with:
           python-version: '3.x'
 
-      # Install mkdocs and the popular Material theme
       - name: Install dependencies
         run: |
           pip install mkdocs mkdocs-material
 
-      # Build and push the generated HTML files to the gh-pages branch
       - name: Deploy to GitHub Pages
         run: |
           mkdocs gh-deploy --force

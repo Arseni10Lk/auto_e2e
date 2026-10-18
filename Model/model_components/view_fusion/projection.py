@@ -1,25 +1,19 @@
 """Differentiable camera projection operators for BEV view fusion.
 
-The contract of ``BEVViewFusion`` with geometry is NOT a fixed ``[B, V, 3, 4]``
-matrix. It is a *projection operator*: something that maps ego-frame BEV
-reference points to sampling coordinates on each camera's model-input image
-plane, plus a visibility mask. A pinhole ``K @ T`` matrix is only ONE such
-operator (its linear fast path). Fisheye (f-theta) cameras need a non-linear
-operator, and a calibration-free run needs a learnable pseudo operator. All
-expose the same :meth:`project_ego_to_image` so the fusion module never branches
-on camera model.
+``BEVViewFusion`` consumes geometry as a *projection operator*
+(:class:`CameraProjectionModel`) rather than a fixed ``[B, V, 3, 4]`` matrix:
+it maps ego-frame BEV reference points to sampling coordinates on each camera's
+model-input image plane, plus a visibility mask. A pinhole ``K @ T`` matrix is
+the linear fast path (:class:`PinholeProjection`); native fisheye uses the
+non-linear :class:`FThetaProjection` so it keeps its full FOV; a
+calibration-free run uses the learnable :class:`PseudoProjection`. All expose
+the same :meth:`project_ego_to_image`, so the fusion module never branches on
+camera model.
 
-Design (per the Issue #77 discussion):
-    - The public contract is :class:`CameraProjectionModel`, not ``K @ T``. A
-      pinhole matrix lives *inside* :class:`PinholeProjection` as a fast path.
-    - Native fisheye is a first-class :class:`FThetaProjection`; we do not force
-      it through a pinhole (which would lose FOV). Rectification, when wanted, is
-      expressed as an :class:`ImageTransform` + a ``rectified_pinhole`` operator,
-      not by pretending a fisheye is a pinhole.
-    - Projection is defined against the *model-input* image frame, so the image
-      side (resize/crop/pad/rectification) is part of the contract via
-      :class:`ImageTransform` — a projection that is correct on the raw image but
-      not on the resized tensor would sample the wrong pixels.
+Projection targets the *model-input* image frame, so resize/crop/pad and
+rectification are part of the contract via :class:`ImageTransform`; a
+projection that is correct on the raw image but not on the resized tensor
+would sample the wrong pixels.
 
 Coordinate convention: reference points are in the ego/vehicle frame,
 X=forward, Y=left, Z=up, in metres. :meth:`project_ego_to_image` returns pixel
@@ -28,12 +22,8 @@ visibility mask, the per-point depth/range, and a metadata dict recording the
 geometry that produced the result.
 
 Reference:
-    - BEVFormer (Li et al., ECCV 2022): spatial cross-attention. Its essence is
-      "each BEV query samples relevant regions from each camera view"; the
-      projection being a pinhole matrix is an implementation detail, not the
-      contract.
-    - NVIDIA PhysicalAI-AV sensor model: native f-theta (fisheye), motivating a
-      non-linear projection operator rather than a pinhole-only ABI.
+    - BEVFormer (Li et al., ECCV 2022): spatial cross-attention.
+    - NVIDIA PhysicalAI-AV sensor model: native f-theta (fisheye).
 """
 
 from __future__ import annotations
@@ -43,8 +33,8 @@ from typing import Optional, Protocol, runtime_checkable
 
 import torch
 
-# Geometry labels. A projection operator carries exactly one of these so
-# experiment metadata can record, honestly, which geometry produced a run.
+# Geometry labels. Each projection operator carries exactly one so experiment
+# metadata records which geometry produced a run.
 GEOMETRY_PINHOLE = "pinhole"
 GEOMETRY_RECTIFIED_PINHOLE = "rectified_pinhole"
 GEOMETRY_FTHETA = "ftheta"
@@ -65,20 +55,16 @@ _DEPTH_EPS = 1e-5
 class ImageTransform:
     """Describes the model-input image frame a projection must target.
 
-    A projection is only useful if its pixel coordinates match the tensor that
-    actually enters the backbone. If the raw image was resized/cropped/padded (or
-    rectified from a fisheye), the projection's ``uv`` must be expressed in that
-    final frame. This dataclass carries the information needed to normalize
-    projected pixels into ``[0, 1]`` for ``grid_sample`` and to record, honestly,
-    what image-side processing was applied.
+    Projected ``uv`` must be expressed in the frame of the tensor that enters
+    the backbone, after any resize/crop/pad or fisheye rectification.
 
     Attributes:
         model_input_size: ``(width, height)`` of the tensor fed to the backbone.
             uv is normalized by this (per-axis), so non-square inputs are handled.
         original_size: ``(width, height)`` of the raw image, if known (metadata).
         rectification: label of any rectification applied to the raw image before
-            the backbone (e.g. "ftheta_to_pinhole"), or None. Metadata/honesty
-            only; the geometry itself lives in the projection operator.
+            the backbone (e.g. "ftheta_to_pinhole"), or None. Metadata only;
+            the geometry itself lives in the projection operator.
     """
 
     model_input_size: tuple[int, int]
@@ -118,11 +104,10 @@ class ProjectionResult:
         valid_mask: ``[Bp, V, M]`` bool — True where the point is in front of the
             camera AND lands within the image bounds.
         depth: ``[Bp, V, M]`` per-point depth/range along the optical axis
-            (metres for calibrated cameras). Diagnostics / future depth
-            supervision; not required by the sampler.
-        metadata: what geometry produced this result (geometry_type,
-            model_input_size, rectification). Recorded so experiment logs are
-            honest about pinhole vs f-theta vs pseudo.
+            (metres for calibrated cameras). Diagnostics only; not required by
+            the sampler.
+        metadata: geometry that produced this result (geometry_type,
+            model_input_size, rectification).
     """
 
     uv_norm: torch.Tensor
@@ -155,7 +140,7 @@ class CameraProjectionModel(Protocol):
 def _homogenize(points_ego: torch.Tensor) -> torch.Tensor:
     """``[M, 3]`` ego points -> ``[M, 4]`` homogeneous (append a ones column)."""
     if points_ego.shape[-1] == 4:
-        return points_ego  # already homogeneous
+        return points_ego
     ones = torch.ones(
         *points_ego.shape[:-1], 1, device=points_ego.device, dtype=points_ego.dtype
     )
@@ -173,15 +158,13 @@ def _finalize_linear(projected, image_transform, geometry_type) -> ProjectionRes
     depth = projected[..., 2]                         # [Bp, V, M]
     valid_depth = depth > _DEPTH_EPS                  # in front of the camera
     depth_safe = depth.clamp(min=_DEPTH_EPS).unsqueeze(-1)  # avoid div-by-zero
-    # fp32 perspective divide AND normalize: under fp16 autocast a near-_DEPTH_EPS
-    # depth makes the divide (and its 1/d² backward) overflow to inf → nan grads
-    # that freeze AMP training. The unbounded pixel coord numerator/depth can also
-    # exceed fp16 max BEFORE the /wh normalize, so we must NOT cast back to fp16
-    # until AFTER normalizing (a normalized coord is O(1) and fp16-safe). Keep the
-    # whole geometry divide+normalize in fp32, then cast the bounded result.
+    # Divide and normalize in fp32: under fp16 autocast a near-_DEPTH_EPS depth
+    # overflows the divide (and its 1/d^2 backward) to inf, and the unnormalized
+    # pixel coordinate can exceed fp16 max. The result also stays fp32 because
+    # bf16 quantization of [0, 1] is several pixels at 512/1024 resolution.
     uv_f = projected[..., :2].float() / depth_safe.float()
     wh = torch.tensor([w, h], device=uv_f.device, dtype=torch.float32)
-    uv_norm = (uv_f / wh).to(projected.dtype)
+    uv_norm = uv_f / wh
     in_bounds = (
         (uv_norm[..., 0] >= 0) & (uv_norm[..., 0] <= 1)
         & (uv_norm[..., 1] >= 0) & (uv_norm[..., 1] <= 1)
@@ -259,16 +242,21 @@ class PinholeProjection:
         """Project ego points ``[M, 3]`` (or homogeneous ``[M, 4]``) onto each
         camera. ``B, V`` come from the matrix — runtime ``V`` is derived here."""
         pts = _homogenize(points_ego)
-        proj = self.matrix.to(device=pts.device, dtype=pts.dtype)
-        # out[b, v, m, i] = sum_j proj[b, v, i, j] * points[m, j]
-        projected = torch.einsum("bvij,mj->bvmi", proj, pts)
+        with torch.autocast(device_type=pts.device.type, enabled=False):
+            proj = self.matrix.to(device=pts.device, dtype=torch.float32)
+            # out[b, v, m, i] = sum_j proj[b, v, i, j] * points[m, j]
+            projected = torch.einsum(
+                "bvij,mj->bvmi",
+                proj,
+                pts.float(),
+            )
         return _finalize_linear(projected, image_transform, self.geometry_type)
 
 
 class PseudoProjection:
     """Learnable calibration-free fallback (shape-testing / ablation only).
 
-    This is NOT real geometry. It is a learnable spatial prior that lets the
+    This is not real geometry but a learnable spatial prior that lets the
     module run without calibration. A single shared ``[3, 4]`` matrix is expanded
     to ``V`` views at projection time, so one instance serves any view count.
     Pixel coordinates are squashed with ``sigmoid`` (the raw matrix is unbounded)
@@ -276,16 +264,14 @@ class PseudoProjection:
 
     The learnable tensor is owned by :class:`BEVViewFusion` (a leaf Parameter, so
     the optimizer sees it); this operator wraps it per forward. Callers must
-    explicitly request the pseudo path — the fusion module never falls into it
-    silently on behalf of a caller that meant to pass real calibration.
+    request the pseudo path explicitly.
     """
 
     geometry_type = GEOMETRY_PSEUDO
 
     def __init__(self, matrix: torch.Tensor, num_views: int):
-        # Accept exactly [3, 4] or a leading-1 [1, 3, 4]; anything else (e.g. a
-        # per-view [V, 3, 4]) is a misuse — the prior is view-independent — and
-        # would silently mis-reshape, so reject it explicitly.
+        # The prior is view-independent; a per-view [V, 3, 4] would silently
+        # mis-reshape, so only [3, 4] or [1, 3, 4] is accepted.
         if tuple(matrix.shape) not in ((3, 4), (1, 3, 4)):
             raise ValueError(
                 f"PseudoProjection matrix must be [3, 4] or [1, 3, 4], "
@@ -299,22 +285,28 @@ class PseudoProjection:
         # Expand the shared [3, 4] prior to [1, V, 3, 4]: batch dim 1 broadcasts
         # across the real batch in the sampling loop (prior is batch- and
         # view-independent by construction).
-        proj = self.matrix.reshape(3, 4).unsqueeze(0).unsqueeze(0)  # [1, 1, 3, 4]
-        proj = proj.expand(1, self.num_views, 3, 4).to(device=pts.device, dtype=pts.dtype)
-        projected = torch.einsum("bvij,mj->bvmi", proj, pts)  # [1, V, M, 3]
+        with torch.autocast(device_type=pts.device.type, enabled=False):
+            proj = self.matrix.reshape(3, 4).unsqueeze(0).unsqueeze(0)
+            proj = proj.expand(1, self.num_views, 3, 4).to(
+                device=pts.device,
+                dtype=torch.float32,
+            )
+            projected = torch.einsum(
+                "bvij,mj->bvmi",
+                proj,
+                pts.float(),
+            )
 
         depth = projected[..., 2]
         valid_depth = depth > _DEPTH_EPS
         depth_safe = depth.clamp(min=_DEPTH_EPS).unsqueeze(-1)
-        # Do the perspective divide + sigmoid in fp32: under fp16 autocast the
-        # divide by a near-_DEPTH_EPS depth overflows to inf and sigmoid saturates
-        # (grad 0), so backward computes 0*inf = nan. That nan is scale-invariant,
-        # so the AMP GradScaler skips optimizer.step() on EVERY iteration and the
-        # whole net never trains (perfectly flat loss). Geometry math must be fp32.
+        # Divide and sigmoid in fp32: under fp16 the near-_DEPTH_EPS divide
+        # overflows to inf while sigmoid saturates, giving 0*inf = nan grads that
+        # make the AMP GradScaler skip every optimizer step.
         uv = projected[..., :2].float() / depth_safe.float()
         # Unbounded pseudo outputs → sigmoid to keep coords in (0, 1). in-bounds
         # is then trivially satisfied, so the mask reduces to the depth check.
-        uv_norm = uv.sigmoid().to(projected.dtype)
+        uv_norm = uv.sigmoid()
         it = _as_image_transform(image_transform)
         meta = {"geometry_type": self.geometry_type,
                 "model_input_size": it.model_input_size, "rectification": None}
@@ -325,8 +317,8 @@ class PseudoProjection:
 class FThetaProjection:
     """Non-linear f-theta (fisheye) projection, native to NVIDIA PhysicalAI-AV.
 
-    Maps ego points to pixels WITHOUT flattening the fisheye to a pinhole, so a
-    wide-FOV camera keeps its full field of view (no rectification FOV loss). The
+    Maps ego points to pixels without flattening the fisheye to a pinhole, so a
+    wide-FOV camera keeps its full field of view. The
     forward polynomial maps the incidence angle ``theta`` (angle between the
     camera-frame ray and the optical +Z axis) to a pixel radius::
 
@@ -336,28 +328,23 @@ class FThetaProjection:
     where ``rho = sqrt(x_cam^2 + y_cam^2)``. Matches the SDK's
     ``FThetaCameraModel.ray2pixel``.
 
-    Native pixel frame (important): ``cx/cy`` and ``fw_poly`` are kept in the
-    camera's NATIVE pixel resolution ``image_wh = (W, H)``, NOT pre-scaled to the
-    model input. The projected ``(u, v)`` is normalized per-axis by the native
-    ``(W, H)`` — ``u_norm = u / W``, ``v_norm = v / H``. Under a plain
-    aspect-changing resize to the model input this is EXACT (``u_native / W`` ==
-    ``u_model / W_model``), so no anisotropic radius approximation is needed; the
-    f-theta radial polynomial (which is isotropic in native pixels) is never
-    scaled by a single mean factor.
+    ``cx/cy`` and ``fw_poly`` are kept in the camera's native pixel resolution
+    ``image_wh = (W, H)``, not pre-scaled to the model input. The projected
+    ``(u, v)`` is normalized per-axis by the native ``(W, H)``. Under a plain
+    aspect-changing resize this is exact (``u_native / W == u_model / W_model``),
+    so the isotropic radial polynomial never needs an anisotropic approximation.
 
     Parameters:
         t_camera_ego: ``[B, V, 4, 4]`` ego->camera rigid transform.
         fw_poly: ``[K]`` or ``[B, V, K]`` forward polynomial coefficients
-            (ascending powers of theta), radius in NATIVE pixels.
-        cx, cy: principal point in NATIVE pixels, scalar or ``[B, V]``.
+            (ascending powers of theta), radius in native pixels.
+        cx, cy: principal point in native pixels, scalar or ``[B, V]``.
         image_wh: native ``(W, H)`` the intrinsics are expressed in; used to
             normalize ``(u, v)`` to ``[0, 1]``. Scalar ``(W, H)`` or per-view
-            ``([B,]V, 2)``. Required so normalization is exact regardless of the
-            model-input resize.
+            ``([B,]V, 2)``.
         max_theta: incidence-angle FOV cutoff (radians); the upper bound of the
             valid theta range. Points beyond it are masked (outside the lens).
-            When None, the operator falls back to the +Z hemisphere (z>0) — an
-            f-theta run WITHOUT a FOV bound (recorded in metadata).
+            When None, the operator falls back to the +Z hemisphere (z>0).
         bw_poly: optional backward polynomial (radius -> theta) for inverse/remap
             (e.g. rectification); not used by the forward projection.
     """
@@ -423,13 +410,11 @@ class FThetaProjection:
 
         ``fw_poly`` is ascending-power coefficients. Accepts a shared ``[K]``
         vector, a per-view ``[V, K]``, or a batched ``[B, V, K]`` — all are
-        normalized to broadcast against ``theta`` ``[B, V, M]``, so the operator
-        is robust to however it was constructed (e.g. reloaded from a manifest).
-        A shared ``[K]`` is applied identically to every view/point.
+        normalized to broadcast against ``theta`` ``[B, V, M]`` (e.g. when
+        reloaded from a manifest).
         """
         coeffs = torch.as_tensor(self.fw_poly, device=theta.device, dtype=theta.dtype)
         if coeffs.dim() == 1:
-            # shared [K] — plain Horner, broadcasts over all of theta.
             r = torch.zeros_like(theta)
             for c in reversed(coeffs.unbind(0)):
                 r = r * theta + c
@@ -450,13 +435,21 @@ class FThetaProjection:
     def project_ego_to_image(self, points_ego, image_transform) -> ProjectionResult:
         pts = _homogenize(points_ego)
         it = _as_image_transform(image_transform)
-        T = self.t_camera_ego.to(device=pts.device, dtype=pts.dtype)
-        # camera-frame points: [B, V, M, 4] then drop homogeneous w.
-        cam = torch.einsum("bvij,mj->bvmi", T, pts)[..., :3]
+        with torch.autocast(device_type=pts.device.type, enabled=False):
+            T = self.t_camera_ego.to(
+                device=pts.device,
+                dtype=torch.float32,
+            )
+            # camera-frame points: [B, V, M, 4] then drop homogeneous w.
+            cam = torch.einsum(
+                "bvij,mj->bvmi",
+                T,
+                pts.float(),
+            )[..., :3]
         x, y, z = cam[..., 0], cam[..., 1], cam[..., 2]
         rho = torch.sqrt(x * x + y * y).clamp(min=_DEPTH_EPS)
         theta = torch.atan2(rho, z)                     # incidence angle from +Z
-        r = self._radius(theta)                         # pixel radius (NATIVE px)
+        r = self._radius(theta)                         # pixel radius (native px)
         cx = torch.as_tensor(self.cx, device=cam.device, dtype=cam.dtype)
         cy = torch.as_tensor(self.cy, device=cam.device, dtype=cam.dtype)
         if cx.dim() > 0:
@@ -464,9 +457,7 @@ class FThetaProjection:
             cy = cy.unsqueeze(-1)
         u = cx + r * (x / rho)     # native pixel u
         v = cy + r * (y / rho)     # native pixel v
-        # Normalize per-axis by the NATIVE (W, H) the intrinsics live in. Under a
-        # plain resize to the model input this is exact (model size cancels), so
-        # an anisotropic resize needs no radius approximation.
+        # Normalize per-axis by the native (W, H) the intrinsics live in.
         wh = torch.as_tensor(self.image_wh, device=cam.device, dtype=cam.dtype)
         if wh.dim() >= 1 and wh.shape[-1] == 2 and wh.dim() > 0:
             # scalar (2,) -> broadcast; per-view ([B,]V,2) -> add M axis
@@ -485,10 +476,9 @@ class FThetaProjection:
             & (uv_norm[..., 1] >= 0) & (uv_norm[..., 1] <= 1)
         )
         # A fisheye sees rays beyond the +Z hemisphere (theta up to its real FOV,
-        # which can exceed 90°), so do NOT gate on z > 0 — that would reimpose a
-        # 180° ceiling and defeat the native f-theta operator. Gate on the lens
-        # FOV (max_theta) when known; otherwise fall back to the +Z hemisphere as
-        # a safe default (we cannot validate arbitrary wide rays without a bound).
+        # which can exceed 90°), so gating on z > 0 would impose a 180° ceiling.
+        # Gate on the lens FOV (max_theta) when known; otherwise fall back to the
+        # +Z hemisphere, since wide rays cannot be validated without a bound.
         if self.max_theta is not None:
             # Accept a Python scalar, a list (e.g. reloaded from a manifest), or a
             # tensor. A per-view bound must broadcast against theta [B, V, M], so
@@ -498,10 +488,9 @@ class FThetaProjection:
                 max_theta = max_theta.reshape(1, -1)   # [V] -> [1, V]
             if max_theta.dim() > 0:
                 max_theta = max_theta.unsqueeze(-1)    # [B, V] -> [B, V, 1]
-            # A non-finite (inf) per-view bound means "this lens has no FOV bound"
-            # — it must fall back to the +Z hemisphere gate, NOT accept everything
-            # (theta <= inf is always true, which would wrongly admit rays from
-            # BEHIND that lens in a mixed rig). Apply the angle gate per-view.
+            # A non-finite per-view bound means that lens has no FOV bound and
+            # falls back to the +Z hemisphere gate; theta <= inf would otherwise
+            # admit rays from behind that lens in a mixed rig.
             angle_ok = torch.where(torch.isfinite(max_theta),
                                    theta <= max_theta, z > _DEPTH_EPS)
             mask = in_bounds & angle_ok

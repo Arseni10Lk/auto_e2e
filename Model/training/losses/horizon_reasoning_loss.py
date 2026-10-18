@@ -1,8 +1,7 @@
-"""Horizon-aware reasoning loss (issue #98, v2).
+"""Horizon-aware reasoning loss.
 
 Supervises :class:`HorizonReasoningPrediction` against offline teacher labels.
-Lives OUTSIDE the model (in ``training/``) and is computed in the training loop,
-matching the per-branch-loss-module policy (same as the JEPA loss, #85/#13).
+Lives outside the model (in ``training/``) and is computed in the training loop.
 
 Four groups of terms:
     * structured — per action-relevant group, per horizon: BCE (or Asymmetric
@@ -13,7 +12,7 @@ Four groups of terms:
 
 Every term is source-/confidence-weighted (``source_weight × label_confidence``)
 and abstained horizons are masked out (weight 0), so an endpoint failure never
-contributes a spurious all-zero target (R8/R9). Per-head weights make the
+contributes a spurious all-zero target. Per-head weights make the
 action-facing heads (response / hazard / relation) dominate generic context.
 """
 
@@ -44,7 +43,7 @@ _GROUP_TO_ATTR: Dict[str, str] = {
     "rule_response": "rule_response_logits",
 }
 
-# Per-head weights: action-facing heads dominate generic context (#98 Loss §4).
+# Per-head weights: action-facing heads dominate generic context.
 _DEFAULT_HEAD_WEIGHTS: Dict[str, float] = {
     "longitudinal_response": 1.0,
     "lateral_response": 1.0,
@@ -89,7 +88,7 @@ class HorizonReasoningLoss:
         head_weights: per-group scalar weights (defaults to
             :data:`_DEFAULT_HEAD_WEIGHTS`; groups absent default to 1.0).
         lambda_structured / lambda_confidence / lambda_temporal / lambda_alignment:
-            the four term weights (#98 defaults 0.5 / 0.05 / 0.1 / 0.0-or-0.5).
+            the four term weights.
         multilabel_loss: ``"bce"`` (default) or ``"asl"`` for multi-label heads.
 
     Call:
@@ -119,10 +118,6 @@ class HorizonReasoningLoss:
         self.lambda_temporal = lambda_temporal
         self.lambda_alignment = lambda_alignment
         self.multilabel_loss = multilabel_loss
-
-    # ------------------------------------------------------------------
-    # Structured term
-    # ------------------------------------------------------------------
 
     def _structured(
         self,
@@ -170,10 +165,6 @@ class HorizonReasoningLoss:
         valid = (target != IGNORE_INDEX).float()
         return _weighted_mean(ce, weights * valid)
 
-    # ------------------------------------------------------------------
-    # Confidence term (Brier)
-    # ------------------------------------------------------------------
-
     def _confidence(
         self,
         prediction: HorizonReasoningPrediction,
@@ -183,10 +174,6 @@ class HorizonReasoningLoss:
         pred = torch.sigmoid(prediction.confidence_logits.squeeze(-1))  # [B,5]
         se = (pred - confidence_targets.float()) ** 2                   # [B,5]
         return _weighted_mean(se, weights)
-
-    # ------------------------------------------------------------------
-    # Temporal consistency (weak regulariser)
-    # ------------------------------------------------------------------
 
     def _temporal(
         self,
@@ -214,10 +201,6 @@ class HorizonReasoningLoss:
             total = total + step.mean()
         return total
 
-    # ------------------------------------------------------------------
-    # Alignment term (optional, cosine)
-    # ------------------------------------------------------------------
-
     def _alignment(
         self,
         prediction: HorizonReasoningPrediction,
@@ -234,10 +217,6 @@ class HorizonReasoningLoss:
         t = F.normalize(teacher_embedding_targets.float(), dim=-1)
         cos = (s * t).sum(dim=-1)                                       # [B,5]
         return _weighted_mean(1.0 - cos, weights)
-
-    # ------------------------------------------------------------------
-    # Public entry point
-    # ------------------------------------------------------------------
 
     def __call__(
         self,

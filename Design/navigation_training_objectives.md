@@ -4,7 +4,7 @@
 
 | Field | Value |
 |---|---|
-| Status | Implemented and smoke-validated; full comparison pending |
+| Status | Implemented and smoke-validated (acceptance items 1-8, §20); the full-run comparison in item 9 is not recorded here |
 | Owner | riita10069 |
 | Created | 2026-07-26 |
 | Related issue | [#149](https://github.com/autowarefoundation/auto_e2e/issues/149) |
@@ -66,16 +66,22 @@ The current Reactive path is:
 ```text
 camera -> Backbone -> FeatureFusion -> image_bev ------------------+
                                                                     |
-map_context + route_mask -> shared NavigationEncoder -> nav_bev ----+
-                                                                    |
+map_context -> MapEncoder ------------------+                       |
+                                            + -> nav_bev -----------+
+route_mask -> RouteEncoder -> sigmoid gate -+                       |
                                                 zero-init residual fusion
                                                                     |
                                                      TrajectoryPlanner
 ```
 
-The public model API keeps `map_context` and `route_mask` separate, then gates
-and concatenates them immediately before one shared navigation encoder. This
-design does not change that initial #149 architecture.
+The public model API keeps `map_context` and `route_mask` separate.
+`ReactiveE2E` always builds its navigation encoder with
+`build_split_navigation_encoder`, which returns a `SplitNavigationEncoder`
+(`Model/model_components/map_encoder/split_navigation_encoder.py`). It encodes
+the map raster with the configured map encoder and the route raster with a
+`LightweightRouteEncoder`, then adds the route features scaled by a
+per-channel `sigmoid(route_gate)` to the map features
+(`nav_bev = map_bev + sigmoid(route_gate) * route_bev`).
 
 ### 2.2 Current training behavior
 
@@ -118,7 +124,7 @@ independent switches retain scientific traceability.
    camera scene.
 3. Penalize predicted trajectories that leave the selected lane corridor or
    take the wrong junction branch.
-4. Preserve the #149 navigation ABI and Reactive-only route boundary.
+4. Preserve the navigation ABI and Reactive-only route boundary.
 5. Keep every new objective deterministic, masked by validity, and observable.
 6. Allow a combined run and controlled per-component ablations from the same
    implementation.
@@ -556,7 +562,7 @@ MLflow records every field above plus:
 
 The objective-v1 experiment starts from a fresh initialization. It uses:
 
-- the same seed as the controlled #149 comparison;
+- the same seed as the controlled route-conditioning comparison;
 - the same frozen train/validation scene membership;
 - the same camera and navigation geometry;
 - the same batch size and gradient accumulation;
@@ -744,60 +750,35 @@ pre-run gradient budget.
 
 ### 18.5 Route input to Reasoning
 
-Rejected for this objective version. The initial #149 boundary remains
+Rejected for this objective version. The route boundary remains
 Reactive-only.
 
 ## 19. Implementation and Smoke Results
 
-The implementation is on branch `feat/navigation-training-objectives-v1` at
-commit `796bc642dfe84853da3c94367041ebd9638a1807`. It includes:
+The implementation includes:
 
 - KITScenes temporal decay `0.99` with mean-one normalization;
 - packed schema v6 and loss-only `route_supervision.npz`;
 - deterministic `navigation_repeat_v1` exposure;
-- differentiable route corridor, branch, destination, and heading losses;
+- differentiable route corridor, branch, destination, and heading losses
+  (`Model/training/losses/route_consistency_loss.py`);
 - objective identity and resume validation in Flyte;
 - MLflow component, eligibility, gradient, and horizon metrics;
 - KITScenes dataset version v3.1 and audited recovery subset support.
 
-### 19.1 Test results
+### 19.1 Route-loss micro-overfit
 
-Local focused tests passed with `93 passed, 2 skipped`. The full local suite
-passed with `700 passed, 22 skipped` except for one environment-only `pyproj`
-import failure. Installing `pyproj` into an isolated target made the affected
-benchmark group pass with `20 passed`.
-
-On the EC2 development host, the Python 3.12 and Flytekit 1.14.9 environment
-passed:
-
-- workflow tests: `53 passed`;
-- combined focused tests: `149 passed, 1 skipped`.
-
-The L40S route-loss micro-overfit reduced route loss from `4.8912873` to
-`0.0000927427`, produced finite gradients, and allocated approximately
-`1.3 MB` at peak for the isolated loss.
+On an L40S, the isolated route loss fell from `4.8912873` to `0.0000927427`
+with finite gradients and approximately `1.3 MB` peak allocation.
 
 ### 19.2 Flyte GPU smoke
 
-The immutable one-epoch smoke used:
-
-| Field | Value |
-|---|---|
-| Flyte execution | `azm4tbtmlwm6z79cjq9d` |
-| MLflow run | `b1ac46a839cc4cbb93e37202f95a972f` |
-| Source commit | `796bc642dfe84853da3c94367041ebd9638a1807` |
-| Dataset | KITScenes v3.1, audited 10-partition subset |
-| Training/eval image | `sha256:4ad61aaf3fc9e25cb0b681b1fc05a2268fe27493283a9eadc6f78cf6ebd7710c` |
-| Data-prep image | `sha256:43898b5773d2bde24894dd4b4ca7591c6d8f51ff48fee465dfb1eabb0322e223` |
-| Training objective | `kitscenes_navigation_objective_v1` |
-| Route loss weight | `0.10` |
-| Result | Succeeded, train/eval restart count 0 |
+The one-epoch smoke trained `kitscenes_navigation_objective_v1` with route loss
+weight `0.10` on an audited 10-partition KITScenes v3.1 subset.
 
 The training exposure contained 462 unique samples and 1,289 effective
-exposures. Its deterministic exposure digest was
-`2013335b9d95dad39fc62f732ced09f6bfb7cfa5cb7067e0b76e15d373523542`.
-Of 1,289 route candidates, 849 passed the target-compliance gate and 440 were
-rejected.
+exposures. Of 1,289 route candidates, 849 passed the target-compliance gate and
+440 were rejected.
 
 The first fixed-batch route-to-trajectory planner gradient ratio was `1.1887`,
 below the `2.0` budget. The route-input gradient became non-zero at optimizer
@@ -817,23 +798,17 @@ Epoch 1 metrics were:
 | Validation ADE / FDE at 3 s | 0.82374 / 3.43980 m |
 | Validation ADE / FDE at 6.4 s | 8.19002 / 27.53298 m |
 
-The checkpoint SHA-256 was
-`c453ecbb97d67483d43bfe444e5138feb357fc5c049bbff0d011fc8f03aecf54`.
 The one-epoch benchmark quality gate did not pass, as expected for a smoke
 run; the smoke acceptance condition is finite end-to-end optimization,
-checkpointing, and evaluation rather than final model quality.
-
-No OOM, NaN, skipped optimizer step, or container restart occurred. A Flyte
-Propeller metrics-counter panic occurred while reconciling the repack array;
-the controller replica recovered, all repack tasks completed, and the workflow
-reached the terminal succeeded phase. The model and data tasks did not fail.
+checkpointing, and evaluation rather than final model quality. No OOM, NaN,
+skipped optimizer step, or container restart occurred.
 
 ### 19.3 Remaining experiment
 
-Acceptance items 1 through 8 are implemented and smoke-validated. The combined
-20-epoch run, matched no-route control, and frozen full-benchmark comparison in
-acceptance item 9 remain intentionally unlaunched. They are performance
-experiments, not implementation or smoke blockers.
+Acceptance items 1 through 8 are implemented and smoke-validated. Item 9, the
+combined 20-epoch run, matched no-route control, and frozen full-benchmark
+comparison, is a performance experiment rather than an implementation
+requirement.
 
 ## 20. Acceptance Criteria
 

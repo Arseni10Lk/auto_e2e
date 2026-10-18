@@ -29,10 +29,8 @@ supported projection contract. Pseudo or missing geometry is reported as
 unsupported in both the frame label and `manifest.json`; the tool does not
 invent synthetic intrinsics.
 
-The implementation incorporates the standalone report boundary proposed in
-PR #74. Its old checkpoint inference and dataset-specific live loaders are not
-used: Flyte's canonical AOVL is the only prediction source, so an export cannot
-silently diverge from the Console.
+The tool does not run checkpoint inference. Flyte's canonical AOVL is the only
+prediction source, so an export cannot silently diverge from the Console.
 
 ## Local usage
 

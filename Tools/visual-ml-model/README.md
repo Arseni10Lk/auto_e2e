@@ -77,16 +77,33 @@ The IR is plain JSON — tweak a title, a shape, or an edge and re-render instan
 
 ### Registry / factory models — pick a variant
 
-Many models build submodules through a registry/factory (e.g. AutoE2E selects its view-fusion
-via `build_view_fusion(fusion_mode)` over `FUSION_REGISTRY = {"concat":…, "cross_attn":…,
-"bev":…}`). The tool follows the factory to all candidates and lets you choose one via config:
+Many models build submodules through a registry/factory (e.g. AutoE2E selects its trajectory
+planner via `build_planner(planner_mode)` over `PLANNER_REGISTRY = {"flow_matching":…,
+"bezier":…, "gru":…}`). The tool follows the factory to all candidates and lets you choose one
+via config:
 
 ```bash
-python -m viz_ml variants path/to/auto_e2e.py --class AutoE2E
+python -m viz_ml variants ../../Model/model_components/auto_e2e.py --class AutoE2E
+# Registry variants for `AutoE2E`:
+#
 #   FUSION_REGISTRY:
-#     "concat"      -> ConcatViewFusion
-#     "cross_attn"  -> CrossAttentionViewFusion
-#     "bev"         -> BEVViewFusion   ◀ ACTIVE  (when config says "fusion_mode":"bev")
+#     "bev"  ->  BEVViewFusion
+#
+#   TEMPORAL_MEMORY_REGISTRY:
+#     "no_memory"  ->  NoMemory
+#     "one_hz"  ->  OneHzHistoryEncoder
+#
+#   MAP_FUSION_REGISTRY:
+#     "residual"  ->  ResidualMapFusion
+#     "cross_attn"  ->  MapCrossAttentionFusion
+#     "deformable"  ->  MapDeformableCrossAttentionFusion
+#
+#   PLANNER_REGISTRY:
+#     "flow_matching"  ->  FlowMatchingPlanner
+#     "bezier"  ->  BezierPlanner
+#     "gru"  ->  GRUPlanner
+#
+# (none selected — pass a config whose value matches a key above, e.g. {"fusion_mode": "bev"})
 ```
 
 The selected class is drawn as the active architecture; the others are excluded from the flow.

@@ -112,7 +112,7 @@ data "archive_file" "lambda" {
   }
 }
 
-# Kept for backwards compat with state (no-op)
+# No-op retained so existing state does not plan a destroy.
 resource "null_resource" "npm_install" {
   triggers = {
     source = sha256(local.lambda_source)

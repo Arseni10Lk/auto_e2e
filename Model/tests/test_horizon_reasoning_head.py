@@ -1,4 +1,4 @@
-"""Tests for HorizonReasoningHead (issue #98, v2).
+"""Tests for HorizonReasoningHead.
 
 Synthetic tensors, no GPU / network / teacher. Covers:
     * output shapes: horizon_tokens [B,5,256], reasoning_latent [B,256], every

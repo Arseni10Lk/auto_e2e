@@ -1,22 +1,21 @@
-"""Horizon-aware, action-relevant reasoning head (issue #98, v2).
+"""Horizon-aware, action-relevant reasoning head.
 
 Consumes the already-computed 1 Hz Encoded Visual History ``[B, 896]`` and the
 ego-motion context ``[B, 256]`` (from TemporalMemory), projects each source
-into its own 256-d token, and lets five learned **horizon queries** (now, +1s,
+into its own 256-d token, and lets five learned horizon queries (now, +1s,
 +2s, +3s, +4s) cross-attend those context tokens through a small Transformer
 decoder. Each horizon token drives per-group structured heads (relation /
 hazard / cause / the four response axes) plus a per-horizon confidence, and is
 pooled into a compact ``reasoning_latent [B, 256]`` for the planner.
 
-Runtime-safe: NO teacher import, no second vision backbone, no language decoder.
+Runtime-safe: no teacher import, no second vision backbone, no language decoder.
 Teacher supervision is generated offline (see
 ``data_processing/reasoning_label_generation``) and consumed as frozen labels.
 
 Why horizon queries + cross-attention rather than one MLP: a pedestrian that is
 irrelevant *now* may be action-relevant in 2 s. Each horizon needs its own
 representation, and a 2-layer / 4-head / 256-d decoder is far cheaper than a
-language decoder while being more expressive than a shared MLP trunk (the v1
-skeleton this replaces). See ``Design/horizon_reasoning_architecture.md``.
+language decoder while being more expressive than a shared MLP trunk. See ``Design/horizon_reasoning_architecture.md``.
 """
 
 from __future__ import annotations
@@ -29,8 +28,7 @@ import torch.nn as nn
 from .reasoning_taxonomy import DEFAULT_TAXONOMY, ReasoningTaxonomy
 from .types import HorizonReasoningPrediction
 
-# The action-relevant core heads (group name -> attribute on the prediction).
-# Optional v2 context/timing heads can be added later without touching these.
+# Action-relevant core heads (group name -> attribute on the prediction).
 _CORE_HEADS = (
     "relation_to_ego",
     "hazard_event",
@@ -104,11 +102,9 @@ class HorizonReasoningHead(nn.Module):
         teacher_embedding_dim: Optional[int] = None,
     ) -> None:
         super().__init__()
-        # The horizon count is a CROSS-CUTTING constant: the label schema
-        # (HORIZON_SECONDS), the tensorizer, and HorizonReasoningLoss all assume
-        # exactly 5 horizons (now,+1s,+2s,+3s,+4s). Sizing the head differently
-        # would crash the loss with a shape mismatch, so reject it here rather
-        # than advertise a knob the rest of the stack cannot honor.
+        # The label schema (HORIZON_SECONDS), the tensorizer and
+        # HorizonReasoningLoss all assume exactly 5 horizons; any other size
+        # would fail with a shape mismatch in the loss.
         if num_horizons != 5:
             raise ValueError(
                 f"num_horizons must be 5 (fixed across schema/loss); got {num_horizons}. "
@@ -131,7 +127,6 @@ class HorizonReasoningHead(nn.Module):
             if map_context_dim is not None else None
         )
 
-        # Five learned horizon queries: now, +1s, +2s, +3s, +4s.
         self.horizon_queries = nn.Parameter(
             torch.randn(num_horizons, hidden_dim) * 0.02
         )
@@ -144,13 +139,11 @@ class HorizonReasoningHead(nn.Module):
         )
         self.decoder = nn.TransformerDecoder(decoder_layer, num_layers=num_layers)
 
-        # Structured heads: one Linear(hidden_dim, C) per action-relevant group.
         self.heads = nn.ModuleDict(
             {name: nn.Linear(hidden_dim, self.taxonomy.num_classes(name))
              for name in _CORE_HEADS}
         )
 
-        # Per-horizon confidence (raw logits).
         self.confidence_head = nn.Linear(hidden_dim, 1)
 
         # Pooled planner-facing latent.
@@ -160,7 +153,6 @@ class HorizonReasoningHead(nn.Module):
             nn.Linear(hidden_dim, hidden_dim),
         )
 
-        # Optional training-only teacher-embedding alignment head.
         self.teacher_embedding_dim = teacher_embedding_dim
         self.align_head: Optional[nn.Module] = None
         if teacher_embedding_dim is not None:
@@ -178,8 +170,8 @@ class HorizonReasoningHead(nn.Module):
     ) -> torch.Tensor:
         """Stack the available per-source tokens into ``[B, N_context, hidden]``.
 
-        Missing optional sources are OMITTED (no learned null token), per the
-        design: the branch must work with just visual+ego in v1.
+        Missing optional sources are omitted (no learned null token), so the
+        head works with visual and ego context alone.
         """
         tokens = [self.visual_proj(visual_history), self.ego_proj(ego_context)]
         if self.route_proj is not None and route_context is not None:

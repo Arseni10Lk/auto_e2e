@@ -8,6 +8,7 @@ shards on disk.
 import dataclasses
 import io
 import json
+import random
 import zipfile
 
 import numpy as np
@@ -18,7 +19,13 @@ pytest.importorskip("webdataset")  # module imports webdataset at top level
 
 from PIL import Image
 
-from data_parsing.pre_extracted import _decode_sample, load_projection_from_manifest
+from data_parsing.pre_extracted import (
+    _decode_sample,
+    _make_pool_accessor,
+    _source_frame_interval_us_from_history_index,
+    load_projection_from_manifest,
+    packed_sample_tar_paths,
+)
 from navigation.artifacts import (
     SAMPLE_NAVIGATION_ARTIFACT_VERSION,
     encode_array,
@@ -31,16 +38,89 @@ from navigation.supervision import (
     ROUTE_SUPERVISION_ARTIFACT_VERSION,
     empty_route_supervision,
 )
+from reactive_training_contracts import (
+    REACTIVE_BEVFORMER_FRAME_INTERVAL_US,
+    REACTIVE_BEVFORMER_FRAME_OFFSETS,
+    REACTIVE_BEVFORMER_HISTORY_FRAMES,
+    REACTIVE_CAMERA_IMAGE_SIZE,
+    REACTIVE_FRONT_CAMERA_IMAGE_SIZE,
+    REACTIVE_FRONT_CAMERA_INDEX,
+)
 
 
-def _jpeg_bytes(color):
+def _jpeg_bytes(color, *, image_size=256):
     buf = io.BytesIO()
-    Image.new("RGB", (256, 256), color).save(buf, format="JPEG")
+    Image.new("RGB", (image_size, image_size), color).save(
+        buf,
+        format="JPEG",
+    )
     return buf.getvalue()
 
 
 def _ego_bytes():
     return np.zeros(384, dtype=np.float32).tobytes()
+
+
+def _write_frame_pool_archive(root, members):
+    import hashlib
+    import tarfile
+
+    archive_path = root / "frame_pool.tar"
+    with tarfile.open(archive_path, "w") as archive:
+        for name, payload in members:
+            member = tarfile.TarInfo(name)
+            member.size = len(payload)
+            archive.addfile(member, io.BytesIO(payload))
+    (root / "manifest.json").write_text(
+        json.dumps({
+            "frame_pool_archive": archive_path.name,
+            "frame_pool_archive_sha256": hashlib.sha256(
+                archive_path.read_bytes()
+            ).hexdigest(),
+            "frame_pool_frame_count": len(members),
+        }),
+        encoding="ascii",
+    )
+    return archive_path
+
+
+def test_frame_pool_archive_is_verified_and_extracted(tmp_path):
+    payload = _jpeg_bytes((1, 2, 3))
+    _write_frame_pool_archive(
+        tmp_path,
+        [("frame-a.jpg", payload)],
+    )
+
+    accessor = _make_pool_accessor(str(tmp_path))
+
+    assert accessor is not None
+    assert accessor("frame-a") == payload
+    assert (tmp_path / "pool" / "frame-a.jpg").is_file()
+
+
+def test_frame_pool_archive_rejects_path_traversal(tmp_path):
+    _write_frame_pool_archive(
+        tmp_path,
+        [("../escape.jpg", b"unsafe")],
+    )
+
+    with pytest.raises(ValueError, match="unsafe frame-pool"):
+        _make_pool_accessor(str(tmp_path))
+
+
+def test_packed_sample_tar_paths_excludes_frame_pool_archive(tmp_path):
+    sample_shard = tmp_path / "train-000000.tar"
+    sample_shard.write_bytes(b"sample")
+    _write_frame_pool_archive(
+        tmp_path,
+        [("frame-a.jpg", _jpeg_bytes((1, 2, 3)))],
+    )
+    manifest_path = tmp_path / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="ascii"))
+    manifest["shard_names"] = [sample_shard.name]
+    manifest_path.write_text(json.dumps(manifest), encoding="ascii")
+
+    assert packed_sample_tar_paths(tmp_path) == (sample_shard,)
 
 
 def _navigation_members(
@@ -82,6 +162,472 @@ def _navigation_members(
 
 
 class TestDecodeSampleMapSplit:
+    def test_t8_camera_history_pool_index_round_trip(self):
+        projection = np.zeros((1, 3, 4), dtype=np.float32)
+        history_projection = np.zeros(
+            (REACTIVE_BEVFORMER_HISTORY_FRAMES, 1, 3, 4),
+            dtype=np.float32,
+        )
+        history_index = [
+            [f"kitscenes-scene-r{row_index:06d}-c0"]
+            for row_index in range(5, 40, 5)
+        ]
+        pool = {
+            frame[0]: _jpeg_bytes(
+                (history_index, 0, 0),
+                image_size=REACTIVE_CAMERA_IMAGE_SIZE,
+            )
+            for history_index, frame in enumerate(history_index)
+        }
+        sample = {
+            "cam_0.jpg": _jpeg_bytes(
+                (0, 0, 0),
+                image_size=REACTIVE_CAMERA_IMAGE_SIZE,
+            ),
+            "bev_history_index.json": canonical_json_bytes(
+                history_index
+            ),
+            "meta.json": canonical_json_bytes({
+                "frame_idx": 40,
+            }),
+            "calib.json": canonical_json_bytes({
+                "geometry_type": "pinhole",
+                "history_projection": {
+                    "matrix": history_projection.tolist(),
+                    "reference_frame": "current_ego",
+                    "type": "pinhole",
+                },
+                "image_size": REACTIVE_CAMERA_IMAGE_SIZE,
+                "projection": {
+                    "matrix": projection.tolist(),
+                    "type": "pinhole",
+                },
+                "temporal_frame_interval_us": (
+                    REACTIVE_BEVFORMER_FRAME_INTERVAL_US
+                ),
+                "temporal_frame_offsets": list(
+                    REACTIVE_BEVFORMER_FRAME_OFFSETS
+                ),
+            }),
+        }
+
+        out = _decode_sample(sample, pool=pool.__getitem__)
+
+        assert out["camera_history_tiles"].shape == (
+            REACTIVE_BEVFORMER_HISTORY_FRAMES,
+            1,
+            3,
+            REACTIVE_CAMERA_IMAGE_SIZE,
+            REACTIVE_CAMERA_IMAGE_SIZE,
+        )
+        assert torch.equal(
+            out["camera_history_projection_matrix"],
+            torch.from_numpy(history_projection),
+        )
+        assert out["source_frame_index"].item() == 40
+        assert out["source_frame_interval_us"].item() == 100_000
+
+    def test_kitscenes_history_index_rejects_mixed_camera_rows(self):
+        history_index = [
+            [
+                f"kitscenes-scene-r{row_index:06d}-c0",
+                f"kitscenes-scene-r{row_index:06d}-c1",
+            ]
+            for row_index in range(5, 40, 5)
+        ]
+        history_index[3][1] = "kitscenes-scene-r000021-c1"
+
+        assert _source_frame_interval_us_from_history_index(
+            history_index,
+            current_frame_index=40,
+        ) == -1
+
+    def test_t8_camera_history_pool_index_requires_pool(self):
+        sample = {
+            "cam_0.jpg": _jpeg_bytes(
+                (0, 0, 0),
+                image_size=REACTIVE_CAMERA_IMAGE_SIZE,
+            ),
+            "bev_history_index.json": canonical_json_bytes([
+                [f"history-{index}-camera-0"]
+                for index in range(
+                    REACTIVE_BEVFORMER_HISTORY_FRAMES
+                )
+            ]),
+        }
+
+        with pytest.raises(ValueError, match="requires the sibling frame pool"):
+            _decode_sample(sample)
+
+    def test_t8_camera_history_and_projection_round_trip(self):
+        projection = np.zeros((8, 3, 4), dtype=np.float32)
+        projection[:, 2, 3] = 1.0
+        history_projection = np.stack([
+            projection + history_index
+            for history_index in range(
+                REACTIVE_BEVFORMER_HISTORY_FRAMES
+            )
+        ])
+        sample = {
+            f"cam_{index}.jpg": _jpeg_bytes(
+                (index, 0, 0),
+                image_size=(
+                    REACTIVE_FRONT_CAMERA_IMAGE_SIZE
+                    if index == REACTIVE_FRONT_CAMERA_INDEX
+                    else REACTIVE_CAMERA_IMAGE_SIZE
+                ),
+            )
+            for index in range(8)
+        }
+        for history_index in range(
+            REACTIVE_BEVFORMER_HISTORY_FRAMES
+        ):
+            for camera_index in range(8):
+                sample[
+                    f"bev_hist_{history_index}_cam_{camera_index}.jpg"
+                ] = _jpeg_bytes(
+                    (history_index, camera_index, 0),
+                    image_size=REACTIVE_CAMERA_IMAGE_SIZE,
+                )
+        front_projection = projection[:1].copy()
+        front_projection[:, :2] *= (
+            REACTIVE_FRONT_CAMERA_IMAGE_SIZE
+            / REACTIVE_CAMERA_IMAGE_SIZE
+        )
+        sample["calib.json"] = canonical_json_bytes({
+            "front_camera_image_size": REACTIVE_FRONT_CAMERA_IMAGE_SIZE,
+            "front_camera_index": REACTIVE_FRONT_CAMERA_INDEX,
+            "front_projection": {
+                "matrix": front_projection.tolist(),
+                "type": "rectified_pinhole",
+            },
+            "geometry_type": "rectified_pinhole",
+            "history_projection": {
+                "matrix": history_projection.tolist(),
+                "reference_frame": "current_ego",
+                "type": "rectified_pinhole",
+            },
+            "image_size": REACTIVE_CAMERA_IMAGE_SIZE,
+            "projection": {
+                "matrix": projection.tolist(),
+                "type": "rectified_pinhole",
+            },
+            "reference_lidar_timestamp_us": 4_000_000,
+            "temporal_frame_interval_us": (
+                REACTIVE_BEVFORMER_FRAME_INTERVAL_US
+            ),
+            "temporal_frame_offsets": list(
+                REACTIVE_BEVFORMER_FRAME_OFFSETS
+            ),
+        })
+        sample["meta.json"] = canonical_json_bytes({
+            "scenario_token": "nuplan-scenario-001",
+            "split_group_uid": "nuplan-log-001",
+        })
+
+        out = _decode_sample(sample)
+
+        assert out["camera_history_tiles"].shape == (
+            7,
+            8,
+            3,
+            REACTIVE_CAMERA_IMAGE_SIZE,
+            REACTIVE_CAMERA_IMAGE_SIZE,
+        )
+        assert torch.equal(
+            out["camera_history_projection_matrix"],
+            torch.from_numpy(history_projection),
+        )
+        assert "camera_fpn_timestamp_us" not in out
+        assert "camera_fpn_stream_id" not in out
+
+    def test_t8_camera_history_rejects_non_pinhole_base_projection(self):
+        sample = {
+            "cam_0.jpg": _jpeg_bytes(
+                (0, 0, 0),
+                image_size=REACTIVE_CAMERA_IMAGE_SIZE,
+            ),
+        }
+        for history_index in range(REACTIVE_BEVFORMER_HISTORY_FRAMES):
+            sample[f"bev_hist_{history_index}_cam_0.jpg"] = _jpeg_bytes(
+                (history_index, 0, 0),
+                image_size=REACTIVE_CAMERA_IMAGE_SIZE,
+            )
+        history_projection = np.zeros(
+            (REACTIVE_BEVFORMER_HISTORY_FRAMES, 1, 3, 4),
+            dtype=np.float32,
+        )
+        sample["calib.json"] = canonical_json_bytes({
+            "geometry_type": "ftheta",
+            "history_projection": {
+                "matrix": history_projection.tolist(),
+                "reference_frame": "current_ego",
+                "type": "pinhole",
+            },
+            "projection": {"type": "ftheta"},
+            "temporal_frame_interval_us": (
+                REACTIVE_BEVFORMER_FRAME_INTERVAL_US
+            ),
+            "temporal_frame_offsets": list(
+                REACTIVE_BEVFORMER_FRAME_OFFSETS
+            ),
+        })
+
+        with pytest.raises(
+            ValueError,
+            match="history calibration differs",
+        ):
+            _decode_sample(sample)
+
+    def test_front_camera_keeps_native_tensor_and_stacks_base_tensor(self):
+        projection = np.zeros((8, 3, 4), dtype=np.float32)
+        projection[:, 0, 3] = REACTIVE_CAMERA_IMAGE_SIZE / 2
+        projection[:, 1, 3] = REACTIVE_CAMERA_IMAGE_SIZE / 2
+        projection[:, 2, 3] = 1.0
+        front_projection = projection[
+            REACTIVE_FRONT_CAMERA_INDEX:
+            REACTIVE_FRONT_CAMERA_INDEX + 1
+        ].copy()
+        front_projection[:, :2] *= (
+            REACTIVE_FRONT_CAMERA_IMAGE_SIZE
+            / REACTIVE_CAMERA_IMAGE_SIZE
+        )
+        sample = {
+            f"cam_{index}.jpg": _jpeg_bytes(
+                (index, 0, 0),
+                image_size=(
+                    REACTIVE_FRONT_CAMERA_IMAGE_SIZE
+                    if index == REACTIVE_FRONT_CAMERA_INDEX
+                    else REACTIVE_CAMERA_IMAGE_SIZE
+                ),
+            )
+            for index in range(8)
+        }
+        sample["front_camera_fpn.jpg"] = _jpeg_bytes(
+            (7, 8, 9),
+            image_size=REACTIVE_CAMERA_IMAGE_SIZE,
+        )
+        sample["calib.json"] = canonical_json_bytes({
+            "front_camera_image_size": REACTIVE_FRONT_CAMERA_IMAGE_SIZE,
+            "front_camera_fpn_image_size": REACTIVE_CAMERA_IMAGE_SIZE,
+            "front_camera_index": REACTIVE_FRONT_CAMERA_INDEX,
+            "front_projection": {
+                "matrix": front_projection.tolist(),
+                "type": "rectified_pinhole",
+            },
+            "geometry_type": "rectified_pinhole",
+            "image_size": REACTIVE_CAMERA_IMAGE_SIZE,
+            "projection": {
+                "matrix": projection.tolist(),
+                "type": "rectified_pinhole",
+            },
+        })
+
+        out = _decode_sample(sample)
+
+        assert out["visual_tiles"].shape == (
+            8,
+            3,
+            REACTIVE_CAMERA_IMAGE_SIZE,
+            REACTIVE_CAMERA_IMAGE_SIZE,
+        )
+        assert out["front_camera_tile"].shape == (
+            3,
+            REACTIVE_FRONT_CAMERA_IMAGE_SIZE,
+            REACTIVE_FRONT_CAMERA_IMAGE_SIZE,
+        )
+        assert out["front_camera_fpn_tile"].shape == (
+            3,
+            REACTIVE_CAMERA_IMAGE_SIZE,
+            REACTIVE_CAMERA_IMAGE_SIZE,
+        )
+        assert out["front_camera_fpn_available"].item() is True
+        assert out["camera_projection_matrix"].shape == (8, 3, 4)
+        assert out["front_camera_projection_matrix"].shape == (1, 3, 4)
+
+        without_companion = _decode_sample(
+            sample,
+            decode_front_camera_fpn=False,
+        )
+        assert "front_camera_fpn_tile" not in without_companion
+        assert (
+            without_companion["front_camera_fpn_available"].item()
+            is False
+        )
+
+    def test_legacy_front_camera_marks_companion_unavailable_without_tensor(
+        self,
+    ):
+        projection = np.zeros((8, 3, 4), dtype=np.float32)
+        projection[:, 2, 3] = 1.0
+        sample = {
+            f"cam_{index}.jpg": _jpeg_bytes(
+                (index, 0, 0),
+                image_size=(
+                    REACTIVE_FRONT_CAMERA_IMAGE_SIZE
+                    if index == REACTIVE_FRONT_CAMERA_INDEX
+                    else REACTIVE_CAMERA_IMAGE_SIZE
+                ),
+            )
+            for index in range(8)
+        }
+        sample["calib.json"] = canonical_json_bytes({
+            "front_camera_image_size": REACTIVE_FRONT_CAMERA_IMAGE_SIZE,
+            "front_camera_index": REACTIVE_FRONT_CAMERA_INDEX,
+            "front_projection": {
+                "matrix": projection[:1].tolist(),
+                "type": "rectified_pinhole",
+            },
+            "geometry_type": "rectified_pinhole",
+            "image_size": REACTIVE_CAMERA_IMAGE_SIZE,
+            "projection": {
+                "matrix": projection.tolist(),
+                "type": "rectified_pinhole",
+            },
+        })
+
+        out = _decode_sample(sample)
+
+        assert "front_camera_fpn_tile" not in out
+        assert out["front_camera_fpn_available"].item() is False
+
+    def test_front_camera_fpn_image_requires_complete_contract(self):
+        sample = {
+            "cam_0.jpg": _jpeg_bytes(
+                (0, 0, 0),
+                image_size=REACTIVE_FRONT_CAMERA_IMAGE_SIZE,
+            ),
+            "front_camera_fpn.jpg": _jpeg_bytes(
+                (1, 0, 0),
+                image_size=REACTIVE_CAMERA_IMAGE_SIZE,
+            ),
+            "calib.json": canonical_json_bytes({
+                "front_camera_image_size":
+                    REACTIVE_FRONT_CAMERA_IMAGE_SIZE,
+                "front_camera_index": REACTIVE_FRONT_CAMERA_INDEX,
+                "image_size": REACTIVE_CAMERA_IMAGE_SIZE,
+            }),
+        }
+
+        with pytest.raises(
+            ValueError,
+            match="contract and image must coexist",
+        ):
+            _decode_sample(sample)
+
+    @pytest.mark.parametrize(
+        ("calibration_update", "message"),
+        [
+            (
+                {"front_camera_index": REACTIVE_FRONT_CAMERA_INDEX},
+                "contract is incomplete",
+            ),
+            (
+                {
+                    "front_camera_image_size":
+                        REACTIVE_FRONT_CAMERA_IMAGE_SIZE,
+                    "front_camera_index": REACTIVE_FRONT_CAMERA_INDEX,
+                    "image_size": 256,
+                },
+                "differs from model contract",
+            ),
+            (
+                {
+                    "front_camera_image_size":
+                        REACTIVE_FRONT_CAMERA_IMAGE_SIZE,
+                    "front_camera_index": REACTIVE_FRONT_CAMERA_INDEX,
+                    "image_size": REACTIVE_CAMERA_IMAGE_SIZE,
+                },
+                "requires pinhole base and native projections",
+            ),
+            (
+                {
+                    "front_camera_image_size":
+                        REACTIVE_FRONT_CAMERA_IMAGE_SIZE,
+                    "front_camera_index": REACTIVE_FRONT_CAMERA_INDEX,
+                    "front_projection": {
+                        "type": "rectified_pinhole",
+                        "matrix": np.zeros(
+                            (1, 3, 4),
+                            dtype=np.float32,
+                        ).tolist(),
+                    },
+                    "image_size": REACTIVE_CAMERA_IMAGE_SIZE,
+                    "projection": None,
+                },
+                "requires pinhole base and native projections",
+            ),
+            (
+                {
+                    "front_camera_image_size":
+                        REACTIVE_FRONT_CAMERA_IMAGE_SIZE,
+                    "front_camera_index": REACTIVE_FRONT_CAMERA_INDEX,
+                    "front_projection": {
+                        "type": "rectified_pinhole",
+                        "matrix": np.zeros(
+                            (1, 3, 4),
+                            dtype=np.float32,
+                        ).tolist(),
+                    },
+                    "image_size": REACTIVE_CAMERA_IMAGE_SIZE,
+                    "projection": {"type": "ftheta"},
+                },
+                "requires pinhole base and native projections",
+            ),
+        ],
+    )
+    def test_front_camera_rejects_incomplete_calibration(
+        self,
+        calibration_update,
+        message,
+    ):
+        sample = {
+            "cam_0.jpg": _jpeg_bytes(
+                (0, 0, 0),
+                image_size=REACTIVE_FRONT_CAMERA_IMAGE_SIZE,
+            ),
+        }
+        calibration = {
+            "geometry_type": "rectified_pinhole",
+            "projection": {
+                "matrix": np.zeros((1, 3, 4), dtype=np.float32).tolist(),
+                "type": "rectified_pinhole",
+            },
+            **calibration_update,
+        }
+        sample["calib.json"] = canonical_json_bytes(calibration)
+
+        with pytest.raises(ValueError, match=message):
+            _decode_sample(sample)
+
+    def test_front_camera_rejects_projection_scale_mismatch(self):
+        projection = np.zeros((1, 3, 4), dtype=np.float32)
+        projection[:, 2, 3] = 1.0
+        sample = {
+            "cam_0.jpg": _jpeg_bytes(
+                (0, 0, 0),
+                image_size=REACTIVE_FRONT_CAMERA_IMAGE_SIZE,
+            ),
+            "calib.json": canonical_json_bytes({
+                "front_camera_image_size":
+                    REACTIVE_FRONT_CAMERA_IMAGE_SIZE,
+                "front_camera_index": REACTIVE_FRONT_CAMERA_INDEX,
+                "front_projection": {
+                    "matrix": (projection + 1.0).tolist(),
+                    "type": "rectified_pinhole",
+                },
+                "geometry_type": "rectified_pinhole",
+                "image_size": REACTIVE_CAMERA_IMAGE_SIZE,
+                "projection": {
+                    "matrix": projection.tolist(),
+                    "type": "rectified_pinhole",
+                },
+            }),
+        }
+
+        with pytest.raises(ValueError, match="base camera frame"):
+            _decode_sample(sample)
+
     def test_sample_uid_is_preserved_for_overlay_inference(self):
         sample = {"cam_0.jpg": _jpeg_bytes((0, 0, 0)),
                   "ego.npy": _ego_bytes(),
@@ -95,6 +641,7 @@ class TestDecodeSampleMapSplit:
             "cam_0.jpg": _jpeg_bytes((0, 0, 0)),
             "ego.npy": _ego_bytes(),
             "meta.json": json.dumps({
+                "frame_idx": 42,
                 "split_group_uid": "kitscenes-scene-001",
             }).encode("ascii"),
         }
@@ -102,6 +649,33 @@ class TestDecodeSampleMapSplit:
         out = _decode_sample(sample)
 
         assert out["split_group_uid"] == "kitscenes-scene-001"
+        assert out["source_frame_index"].item() == 42
+        assert out["source_frame_interval_us"].item() == -1
+
+    def test_missing_source_frame_index_uses_invalid_sentinel(self):
+        sample = {
+            "cam_0.jpg": _jpeg_bytes((0, 0, 0)),
+            "ego.npy": _ego_bytes(),
+        }
+
+        out = _decode_sample(sample)
+
+        assert out["source_frame_index"].item() == -1
+        assert out["source_frame_interval_us"].item() == -1
+
+    def test_dataset_metadata_does_not_infer_stateful_stream_identity(self):
+        sample = {
+            "cam_0.jpg": _jpeg_bytes((0, 0, 0)),
+            "ego.npy": _ego_bytes(),
+            "meta.json": json.dumps({
+                "scenario_token": "",
+                "split_group_uid": "l2d-episode-001",
+            }).encode("ascii"),
+        }
+
+        out = _decode_sample(sample)
+
+        assert "camera_fpn_stream_id" not in out
 
     def test_map_not_counted_as_camera(self):
         """A sample with 6 cams + map.jpg -> visual_tiles (6,...), map separate."""
@@ -132,6 +706,27 @@ class TestDecodeSampleMapSplit:
         assert out["visual_tiles"].shape[0] == 7
         assert out["map_context"].shape == (3, 256, 256)
         assert out["map_context"].abs().max() == 0.0
+        assert not out["map_valid"]
+        assert not out["route_valid"]
+
+    def test_kitscenes_missing_map_uses_semantic_zero_contract(self):
+        sample = {
+            f"cam_{i}.jpg": _jpeg_bytes((i, 0, 0))
+            for i in range(6)
+        }
+        sample["ego.npy"] = _ego_bytes()
+        sample["calib.json"] = canonical_json_bytes({
+            "dataset": "KIT-MRT/KITScenes-Multimodal",
+            "geometry_type": "pseudo",
+            "image_size": 256,
+        })
+
+        out = _decode_sample(sample)
+
+        assert out["map_context"].shape == (14, 450, 300)
+        assert out["route_mask"].shape == (2, 450, 300)
+        assert out["map_context"].abs().max() == 0.0
+        assert out["route_mask"].abs().max() == 0.0
         assert not out["map_valid"]
         assert not out["route_valid"]
 
@@ -243,15 +838,13 @@ class TestDecodeSampleMapSplit:
 
     def test_shard_pixels_normalized_exactly_once(self):
         """The raw-frame -> JPEG -> loader path must apply ImageNet Normalize
-        EXACTLY ONCE. Regression for the double-normalize bug (#77): the old
-        pre-extraction normalized in the dataset, clamped, then normalized again
-        in the loader. Here the shard JPEG is a plain (unnormalized) image, so the
+        exactly once. The shard JPEG is a plain (unnormalized) image, so the
         decoded tensor must equal Normalize(ToTensor(jpeg)) — and must NOT match a
         twice-normalized tensor."""
         from torchvision import transforms
         mean = [0.485, 0.456, 0.406]
         std = [0.229, 0.224, 0.225]
-        # A plain (unnormalized) shard image, as the corrected packer writes.
+        # A plain (unnormalized) shard image, as the packer writes.
         jpg = _jpeg_bytes((120, 60, 200))
         out = _decode_sample({"cam_0.jpg": jpg, "ego.npy": _ego_bytes()})
         decoded = out["visual_tiles"][0]
@@ -265,7 +858,7 @@ class TestDecodeSampleMapSplit:
             "decoded tensor must NOT be double-normalized"
 
     def test_no_camera_params_key(self):
-        """Geometry is a loader attribute now, never a per-sample tensor."""
+        """Geometry is a loader attribute, never a per-sample tensor."""
         sample = {f"cam_{i}.jpg": _jpeg_bytes((i, 0, 0)) for i in range(6)}
         sample["ego.npy"] = _ego_bytes()
         out = _decode_sample(sample)
@@ -365,7 +958,7 @@ class TestManifestProjection:
 
     def test_ftheta_roundtrip_shared_poly_via_to_spec(self, tmp_path):
         """A shared [K] fw_poly must survive to_spec -> manifest -> load and
-        project without a shape mismatch (round-2 review regression)."""
+        project without a shape mismatch."""
         from model_components.view_fusion.projection import FThetaProjection
 
         V = 2
@@ -384,7 +977,7 @@ class TestManifestProjection:
 
     def test_ftheta_roundtrip_per_view_poly_not_collapsed(self, tmp_path):
         """A per-view [V,K] fw_poly must survive to_spec -> load with EACH view's
-        polynomial preserved (codex review: to_spec was collapsing to view 0)."""
+        polynomial preserved, not collapsed to view 0."""
         from model_components.view_fusion.projection import FThetaProjection
 
         V = 2
@@ -425,7 +1018,7 @@ class TestManifestProjection:
 
 
 class TestDecodeWorldModelWindows:
-    """WM window members hist_/fut_ decode to [steps, V, 3, H, W] (#13)."""
+    """WM window members hist_/fut_ decode to [steps, V, 3, H, W]."""
 
     def _window_sample(self, n_cams=6, T=4, F=4):
         sample = {f"cam_{i}.jpg": _jpeg_bytes((i, 0, 0)) for i in range(n_cams)}
@@ -450,7 +1043,7 @@ class TestDecodeWorldModelWindows:
         assert "history_frames" not in out
         assert "future_frames" not in out
 
-    # --- deduped frame-pool path (#121 §3.4d) ---------------------------------
+    # --- deduped frame-pool path ----------------------------------------------
     def _pool_sample_and_accessor(self, n_cams=6, T=4, F=4):
         """A sample carrying window_index.json + a matching in-memory pool accessor.
 
@@ -512,6 +1105,21 @@ class TestDecodeWorldModelWindows:
         assert accessed
         assert future_ids.isdisjoint(accessed)
 
+    def test_current_frame_only_mode_does_not_require_frame_pool(self):
+        sample, _ = self._pool_sample_and_accessor(
+            n_cams=6, T=4, F=4
+        )
+
+        out = _decode_sample(
+            sample,
+            pool=None,
+            decode_history_frames=False,
+            decode_future_frames=False,
+        )
+
+        assert "history_frames" not in out
+        assert "future_frames" not in out
+
     def test_pool_window_equals_legacy_layout(self):
         """THE byte-equality guarantee: the pool path rebuilds the SAME tensors the
         legacy hist_/fut_ layout would, for the same underlying jpeg bytes."""
@@ -529,7 +1137,7 @@ class TestDecodeWorldModelWindows:
 
 
 class TestMergedDatasetLoader:
-    """Round-robin interleaving of multiple single-dataset loaders (#77 merge)."""
+    """Round-robin interleaving of multiple single-dataset loaders."""
 
     def _fake_loader(self, batches, projection, geom):
         class _L:
@@ -687,6 +1295,34 @@ class TestMergedDatasetLoader:
         assert lifecycle.peak_active == 2
         assert lifecycle.active == 0
 
+    def test_shuffle_seed_deterministically_rotates_source_order(self):
+        from data_parsing.pre_extracted import MergedDatasetLoader
+
+        sources = [
+            self._fake_loader([label], None, "pseudo")
+            for label in range(12)
+        ]
+        first = MergedDatasetLoader(
+            sources,
+            max_active_loaders=3,
+            shuffle_seed=41,
+        )
+        same = MergedDatasetLoader(
+            sources,
+            max_active_loaders=3,
+            shuffle_seed=41,
+        )
+        different = MergedDatasetLoader(
+            sources,
+            max_active_loaders=3,
+            shuffle_seed=42,
+        )
+
+        first_order = [item[0] for item in first]
+        assert [item[0] for item in same] == first_order
+        assert [item[0] for item in different] != first_order
+        assert sorted(first_order) == list(range(12))
+
     def test_child_exception_releases_failed_and_other_active_children(self):
         from data_parsing.pre_extracted import MergedDatasetLoader
 
@@ -728,16 +1364,30 @@ class TestMergedDatasetLoader:
             num_workers=4,
             shuffle=1000,
             shuffle_seed=700,
+            decode_front_camera_fpn=True,
+            drop_last=True,
         )
 
         assert calls == []
         iterator = iter(merged)
-        assert next(iterator)[0] == "partition-0"
+        shuffled_indices = list(range(404))
+        random.Random(700).shuffle(shuffled_indices)
+        assert next(iterator)[0] == (
+            f"partition-{shuffled_indices[0]}"
+        )
         assert len(calls) == 4
         assert all(kwargs["num_workers"] == 1 for _, kwargs in calls)
+        assert all(kwargs["drop_last"] is True for _, kwargs in calls)
+        assert all(
+            kwargs["decode_front_camera_fpn"] is True
+            for _, kwargs in calls
+        )
         assert [
             kwargs["shuffle_seed"] for _, kwargs in calls
-        ] == [700, 701, 702, 703]
+        ] == [
+            700 + index
+            for index in shuffled_indices[:4]
+        ]
         assert merged.shuffle_seed == 700
         assert merged.max_active_loaders == 4
         iterator.close()
@@ -795,11 +1445,9 @@ def _write_shards(dirpath, n_shards, per_shard):
 class TestLoaderYieldsAllSamplesUnderWorkers:
     """Regression: the loader must yield EVERY sample regardless of num_workers.
 
-    webdataset 1.0.2 auto-applies split_by_worker via the `workersplitter`
-    default; passing nodesplitter=split_by_worker too split the shard list TWICE,
-    so num_workers=N silently dropped (N-1)/N of the data (24/48 at nw=2, 12/48 at
-    nw=4). This pins that num_workers>0 sees the full dataset — the #121 P0
-    parallel-decode change and the eval loader (num_workers=4) both depend on it.
+    webdataset 1.0.2 already applies split_by_worker via its `workersplitter`
+    default; also passing nodesplitter=split_by_worker would split the shard list
+    twice and silently drop (N-1)/N of the data at num_workers=N.
     """
 
     def test_no_samples_dropped_across_worker_counts(self, tmp_path):
@@ -816,7 +1464,10 @@ class TestLoaderYieldsAllSamplesUnderWorkers:
     def test_partition_loader_workers_are_not_persistent(self, tmp_path):
         shard_dir = tmp_path / "shards"
         _write_shards(shard_dir, n_shards=2, per_shard=1)
-        from data_parsing.pre_extracted import make_pre_extracted_loader
+        from data_parsing.pre_extracted import (
+            _detach_resource_tracker_pipe_from_exec,
+            make_pre_extracted_loader,
+        )
 
         loader = make_pre_extracted_loader(
             str(shard_dir),
@@ -827,7 +1478,53 @@ class TestLoaderYieldsAllSamplesUnderWorkers:
         torch_loader = loader.pipeline[0]
         assert torch_loader.num_workers == 2
         assert torch_loader.persistent_workers is False
+        assert torch_loader.worker_init_fn is _detach_resource_tracker_pipe_from_exec
         loader.close()
+
+    def test_worker_init_keeps_tracker_pipe_out_of_exec(self, monkeypatch):
+        """Regression: an exec'd torch_shm_manager must not inherit the
+        resource-tracker pipe, or the parent hangs at interpreter exit."""
+        import os
+        from multiprocessing import resource_tracker
+
+        from data_parsing.pre_extracted import (
+            _detach_resource_tracker_pipe_from_exec,
+        )
+
+        read_fd, write_fd = os.pipe()
+        try:
+            os.set_inheritable(write_fd, True)
+            monkeypatch.setattr(
+                resource_tracker._resource_tracker, "_fd", write_fd
+            )
+            _detach_resource_tracker_pipe_from_exec(0)
+            assert os.get_inheritable(write_fd) is False
+        finally:
+            os.close(read_fd)
+            os.close(write_fd)
+
+    def test_shuffle_seed_randomizes_full_shard_order(self, tmp_path):
+        shard_dir = tmp_path / "shards"
+        _write_shards(shard_dir, n_shards=12, per_shard=1)
+        from data_parsing.pre_extracted import make_pre_extracted_loader
+
+        def ordered_keys(seed):
+            loader = make_pre_extracted_loader(
+                str(shard_dir),
+                batch_size=1,
+                num_workers=0,
+                shuffle=1,
+                shuffle_seed=seed,
+            )
+            return [batch["sample_uid"][0] for batch in loader]
+
+        first = ordered_keys(31)
+        same = ordered_keys(31)
+        different = ordered_keys(32)
+
+        assert first == same
+        assert first != different
+        assert sorted(first) == sorted(different)
 
     def test_merged_early_close_stops_all_active_workers(self, tmp_path):
         import multiprocessing as mp

@@ -101,7 +101,7 @@ def compute_open_loop_metrics(
     }
 
 
-# Gate thresholds (initial baselines, tightened after first real training)
+# Gate thresholds in metres.
 GATE_THRESHOLDS = {
     "ADE@3s": 2.0,
     "FDE@3s": 4.0,
@@ -119,12 +119,8 @@ def gate_check(
     return True
 
 
-# ---------------------------------------------------------------------------
-# Complementary metrics (#66 §2-3) — comfort and an off-road proxy.
-# These extend the displacement metrics already provided by
-# ``compute_open_loop_metrics`` above; they need no ground-truth trajectory
-# (comfort) or no other-agent labels (off-road), which L2D lacks.
-# ---------------------------------------------------------------------------
+# Comfort and off-road metrics need no ground-truth trajectory (comfort) and no
+# other-agent labels (off-road), which L2D lacks.
 
 # nuPlan comfort bounds (the full set from nuplan-devkit `ego_is_comfortable`).
 COMFORT_THRESHOLDS = {
@@ -145,7 +141,7 @@ def compute_comfort_metrics(
     dt: float = 0.1,
     thresholds: dict[str, float] = COMFORT_THRESHOLDS,
 ) -> dict[str, float]:
-    """Comfort metrics from the ``(a, κ)`` outputs vs the nuPlan bounds (#66 §3).
+    """Comfort metrics from the ``(a, κ)`` outputs vs the nuPlan bounds.
 
     Mirrors nuplan-devkit's ``ego_is_comfortable`` set — no ground truth needed.
     With the per-step speed ``v[t] = v0 + Σ a·dt`` (clamped ≥ 0):
@@ -158,7 +154,7 @@ def compute_comfort_metrics(
         8.37 m/s³ threshold; *not* lateral jerk)
 
     Reports the batch-mean of each per-sample peak, a per-metric violation rate,
-    and the overall ``comfort_violation_rate`` (fraction of samples exceeding ANY
+    and the overall ``comfort_violation_rate`` (fraction of samples exceeding any
     bound).
 
     Args:
@@ -211,16 +207,15 @@ def _erode_drivable(mask: np.ndarray, iterations: int) -> np.ndarray:
 
     A cell stays drivable only if it and its 4 neighbours are drivable (cells
     outside the grid count as non-drivable), so after ``k`` iterations any cell
-    within Manhattan distance ``k`` of the boundary is removed. Pure-numpy, no
-    scipy. Used to require a safety margin from the road edge.
+    within Manhattan distance ``k`` of the boundary is removed.
     """
     eroded = np.asarray(mask, dtype=bool)
     for _ in range(max(0, int(iterations))):
         nb = eroded.copy()
-        nb[1:, :] &= eroded[:-1, :]      # up neighbour
-        nb[:-1, :] &= eroded[1:, :]      # down neighbour
-        nb[:, 1:] &= eroded[:, :-1]      # left neighbour
-        nb[:, :-1] &= eroded[:, 1:]      # right neighbour
+        nb[1:, :] &= eroded[:-1, :]
+        nb[:-1, :] &= eroded[1:, :]
+        nb[:, 1:] &= eroded[:, :-1]
+        nb[:, :-1] &= eroded[:, 1:]
         nb[0, :] = nb[-1, :] = nb[:, 0] = nb[:, -1] = False   # border = off-road
         eroded = nb
     return eroded
@@ -235,14 +230,13 @@ def offroad_rate(
     ego_size: tuple[float, float] | None = None,
     dilation_px: int = 0,
 ) -> float:
-    """Off-road proxy for collision rate when agents are unlabelled (#66 §2).
+    """Off-road proxy for collision rate when agents are unlabelled.
 
     L2D has no other-agent annotations, so we use the BEV drivable mask: a
-    trajectory is off-road if it leaves the drivable area. By default this checks
-    the trajectory **centre** point (lightweight). For drivable-area *compliance*
-    the ego footprint matters — a corner can leave the road while the centre stays
-    inside — so pass ``ego_size`` to check the four footprint corners, and/or
-    ``dilation_px`` to require a safety margin from the boundary.
+    trajectory is off-road if it leaves the drivable area. By default only the
+    trajectory centre point is checked; a footprint corner can leave the road
+    while the centre stays inside, so pass ``ego_size`` to check the four corners
+    and/or ``dilation_px`` to require a margin from the boundary.
 
     Args:
         positions: ``(B, T, 2)`` integrated ``(x_forward, y_left)`` in metres.

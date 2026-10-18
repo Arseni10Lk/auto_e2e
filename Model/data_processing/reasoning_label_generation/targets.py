@@ -1,4 +1,4 @@
-"""Label → training-target tensorization (issue #98).
+"""Label → training-target tensorization.
 
 Bridges the string-valued :class:`ReasoningLabelRecord` (offline, torch-free)
 to the tensors :class:`HorizonReasoningLoss` consumes. Kept in ``data_processing``
@@ -37,7 +37,7 @@ from .schema import (
 
 IGNORE_INDEX = -100
 
-# Provenance → source weight (issue #98 Loss §3). Abstained horizons get 0.
+# Provenance → source weight. Abstained horizons get 0.
 _SOURCE_WEIGHT: Dict[str, float] = {
     "audited_gt": 1.0,
     "direct_gt": 0.9,
@@ -70,7 +70,7 @@ def record_to_target_tensors(
         ``source_weight``:   ``[5]`` float.
 
     An abstained record yields all-ignore single-label targets, all-zero
-    multi-label targets, and zero source weights (fully masked, R9).
+    multi-label targets, and zero source weights (fully masked).
     """
     H = NUM_HORIZONS
     out: Dict[str, torch.Tensor] = {}
@@ -143,9 +143,7 @@ def target_batch_from_loader(
     )
 
 
-# ---------------------------------------------------------------------------
 # JSON (de)serialization for the per-sample shard member (reasoning.json).
-# ---------------------------------------------------------------------------
 
 def record_to_json(record: ReasoningLabelRecord) -> Dict[str, Any]:
     """Serialize a record to a JSON-able dict (one shard member per sample)."""
@@ -164,15 +162,11 @@ def record_from_json(data: Dict[str, Any]) -> ReasoningLabelRecord:
     return ReasoningLabelRecord(horizons=horizons, **kwargs)
 
 
-# ---------------------------------------------------------------------------
-# Whole-record JSONL (one full record per line) — the JOIN interchange format.
-#
-# The parquet/jsonl in parquet_writer.py are FLATTENED to per-(sample,horizon)
-# rows for analytics/querying; reconstructing whole records from them is lossy
-# and awkward. For the label→shard JOIN we instead write one complete record per
-# line (record_to_json), which data_processing reads back into a
-# {sample_id: record} map to embed as the per-sample reasoning.json member.
-# ---------------------------------------------------------------------------
+# Whole-record JSONL (one full record per line) is the label→shard join format.
+# The parquet/jsonl in parquet_writer.py are flattened to per-(sample, horizon)
+# rows for analytics, and reconstructing whole records from them is lossy, so
+# data_processing reads this format back into a {sample_id: record} map to embed
+# as the per-sample reasoning.json member.
 
 def write_records_jsonl(records, path: str) -> str:
     """Write one full ReasoningLabelRecord per line (JOIN interchange). Returns path."""

@@ -89,7 +89,7 @@ export function useTokenPages<T>(
         coordinateRef.current += 1;
       }
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- caller-supplied deps
   }, [...deps, generation, uniqueItems]);
 
   const loadMore = useCallback(() => {

@@ -1,7 +1,5 @@
 import pytest
 import torch
-import sys
-sys.path.append('..')
 
 
 def make_inputs(batch_size, num_views, device, include_camera_params=False):
@@ -23,7 +21,7 @@ def make_inputs(batch_size, num_views, device, include_camera_params=False):
 class TestFullBackboneIntegration:
     """End-to-end tests with the real pretrained backbone.
 
-    These verify that the full pipeline (backbone → fusion → planner → future)
+    These verify that the full pipeline (backbone → fusion → planner)
     produces correct shapes and numerically stable outputs. Run separately
     from unit tests via: pytest -m integration
     """

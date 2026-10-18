@@ -1,6 +1,6 @@
 #!/bin/bash
 # Bootstrap Terraform backend (S3 bucket + DynamoDB lock table).
-# Run ONCE before the first `terraform init`.
+# Run once before the first `terraform init`.
 #
 # Usage: ./bootstrap.sh
 

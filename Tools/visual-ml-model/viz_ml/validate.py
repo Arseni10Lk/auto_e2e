@@ -22,9 +22,6 @@ def load_schema(schema_path: str) -> dict[str, Any]:
         _SCHEMA_CACHE[schema_path] = json.loads(Path(schema_path).read_text(encoding="utf-8"))
     return _SCHEMA_CACHE[schema_path]
 
-# ---------------------------------------------------------------------------
-# minimal JSON-Schema validation (subset)
-# ---------------------------------------------------------------------------
 
 _JSON_TYPES = {
     "object": dict,
@@ -65,7 +62,6 @@ def _validate_node(value: Any, schema: dict[str, Any], path: str, errors: list[s
     if "enum" in schema:
         if value not in schema["enum"]:
             errors.append(f"{path}: {value!r} not in enum {schema['enum']}")
-        # continue to type checks if any
 
     if "type" in schema and value is not None:
         if not _type_ok(value, schema["type"]):
@@ -105,10 +101,6 @@ def validate_schema(ir: dict[str, Any], schema: dict[str, Any]) -> list[str]:
     _validate_node(ir, schema, "$", errors)
     return errors
 
-
-# ---------------------------------------------------------------------------
-# structural invariants
-# ---------------------------------------------------------------------------
 
 def _has_cycle(adj: dict[str, list[str]]) -> bool:
     WHITE, GRAY, BLACK = 0, 1, 2

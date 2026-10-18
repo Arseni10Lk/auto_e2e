@@ -14,7 +14,7 @@ import (
 // ReasoningLabel is the subset of a reasoning_label_v2 JSON object the console
 // aggregates. Only the fields that actually carry values in the data are
 // decoded; the v2 context axes (weather, geo, road topology, actor_*, timing)
-// are ALL null in this dataset and are intentionally not modelled here.
+// are all null in this dataset and are intentionally not modelled here.
 type ReasoningLabel struct {
 	SchemaVersion   string         `json:"schema_version"`
 	SampleID        string         `json:"sample_id"`
@@ -378,7 +378,7 @@ func (a *ReasoningStatsAccumulator) Snapshot() model.ReasoningStatsBlob {
 //
 // Empty/blank categorical values are skipped (they carry no ODD signal); the
 // taxonomy's own abstain labels (no_hazard, unknown_*, none) are real values
-// and ARE counted so an all-nominal set still reports its dominant class.
+// and are counted so an all-nominal set still reports its dominant class.
 func AggregateStats(labels []ReasoningLabel) model.ReasoningStatsBlob {
 	accumulator := NewReasoningStatsAccumulator()
 	for _, label := range labels {
@@ -439,15 +439,12 @@ type SceneLabelRow struct {
 }
 
 // SceneLabelRows extracts the searchable (field,value) pairs of one label over
-// ALL horizons (pure; no AWS), de-duplicated per (field,value) so a sample is
+// all horizons (pure; no AWS), de-duplicated per (field,value) so a sample is
 // indexed once per value it carries anywhere in its horizon window.
 //
-// This MUST match the horizon window AggregateStats counts (every horizon): the
-// ODD bar charts are built from all 5 horizons, and each bar is click-through
-// to this scene index. Indexing only horizon 0 (the old behavior) meant a value
-// that appears only at a future horizon (+1s..+4s) rendered a nonzero, clickable
-// bar that opened an empty "No matching scenes" drawer. Multi-label axes
-// contribute every member; blank values are skipped.
+// The horizon window must match AggregateStats: each ODD bar clicks through to
+// this index, so a value seen only at a future horizon must still find its
+// scenes. Multi-label axes contribute every member; blank values are skipped.
 func SceneLabelRows(lbl ReasoningLabel) []SceneLabelRow {
 	if lbl.Abstained || len(lbl.Horizons) == 0 || lbl.SampleID == "" {
 		return nil
@@ -483,7 +480,6 @@ func SceneLabelRows(lbl ReasoningLabel) []SceneLabelRow {
 
 // SortedByField returns a field's value->count map as (value,count) buckets
 // sorted by descending count then value, for a stable API response ordering.
-// Kept here (pure) so handlers/tests share one ordering rule.
 func SortedByField(m map[string]int) []model.HistogramBucket {
 	out := make([]model.HistogramBucket, 0, len(m))
 	for v, c := range m {

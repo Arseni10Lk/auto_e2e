@@ -1,7 +1,5 @@
 import pytest
 import torch
-import sys
-sys.path.append('..')
 
 from model_components.trajectory_planning import (
     BezierPlanner,
@@ -345,7 +343,7 @@ class TestAutoE2EWithFlowMatching:
         assert torch.isfinite(traj).all()
 
     def test_train_mode_also_returns_trajectory(self, build_mock_model, device):
-        """Post-refactor the planner forward always returns the trajectory; the
+        """The planner forward always returns the trajectory; the
         loss is the training loop's concern, not AutoE2E.forward's."""
         model = self._fm_model(build_mock_model, device)
         model.train()

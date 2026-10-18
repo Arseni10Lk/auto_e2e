@@ -40,8 +40,7 @@ function ShardSamplesInner({
   );
 
   // First page from useApi; extra pages append via "Load more" so a shard with
-  // hundreds of samples is fully browsable (the API caps one page, previously
-  // stranding everything past the first 50).
+  // hundreds of samples is fully browsable (the API caps one page).
   const [extra, setExtra] = useState<Sample[]>([]);
   const [more, setMore] = useState(false);
   const [total, setTotal] = useState(0);

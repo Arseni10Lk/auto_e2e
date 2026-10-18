@@ -1,16 +1,16 @@
-"""Single source of truth for the data-pipeline CONTRACT versions (#121 §3.4c).
+"""Single source of truth for the data-pipeline contract versions.
 
 These version strings are the only sanctioned way to invalidate the Flyte task
-cache / reasoning-label S3 cache. Each is defined here ONCE and imported wherever
-it is needed — never written as an inline literal — so a `grep` over this file
-shows every cache-invalidating knob and its blast radius.
+cache and the reasoning-label S3 cache. Each is defined here once and imported
+wherever it is needed, never written as an inline literal, so this file shows
+every cache-invalidating knob.
 
-Bump a version ONLY in a reviewed change, with a one-line reason, when the thing
-it names actually changes. The stability test asserts these are single constants
-and that no runtime/tuning knob (episode count, num_workers, resource limits, …)
-ever enters a cached task's input signature.
+Bump a version only when the thing it names actually changes. The stability
+test asserts these are single constants and that no runtime/tuning knob
+(episode count, num_workers, resource limits, …) enters a cached task's input
+signature.
 
-| Version              | Bump ONLY when…                                        | Re-runs         |
+| Version              | Bump only when…                                        | Re-runs         |
 |----------------------|--------------------------------------------------------|-----------------|
 | UID_SCHEMA_VERSION   | the sample_uid / split_group_uid FORMAT changes        | label + pack    |
 | PARSER_VERSION       | sample ENUMERATION or per-sample fields change         | ingest+label+pack|
@@ -19,14 +19,18 @@ ever enters a cached task's input signature.
 | REASONING_LABEL_POLICY_VERSION | the reasoning sample selection changes     | label + pack    |
 
 Source revision (HF commit), teacher model revision, and the prompt body hash are
-NOT constants here — they are resolved at run time (from HF / teacher config /
-prompt text) and threaded through as inputs; see DatasetSnapshot (§3.4a).
+not constants here; they are resolved at run time (from HF / teacher config /
+prompt text) and threaded through as inputs; see DatasetSnapshot.
+
+nuPlan BEV class semantics are versioned separately by
+`BEV_SEGMENTATION_TAXONOMY_VERSION` and the nuPlan pack task cache. A semantic
+target change must bump both without changing the stable NPZ encoding version.
 """
 
 from __future__ import annotations
 
 # Format of sample_uid ("l2d-v1-e…-f…") and split_group_uid. Bump if the id
-# STRING format changes (not when new episodes are added).
+# string format changes (not when new episodes are added).
 UID_SCHEMA_VERSION = "v1"
 
 # Sample enumeration + per-sample field contract of the parsers
@@ -37,29 +41,51 @@ PARSER_VERSION = "v3"
 # Packed WebDataset shard member layout (cam_i.jpg / map.jpg / hist_*/fut_* /
 # ego.npy / meta.json / calib.json / reasoning.json). Bump if the member set,
 # names, or encoding change.
-# v2 (dedup pack, #121 §3.4d): added `window_index.json` per-sample member and
-# a SIBLING `pool/{frame_id}.jpg` directory replacing legacy `hist_*/fut_*` tar
-# members. Loader now requires pool/ when window_index.json is present.
+# v2: added `window_index.json` per-sample member and a sibling
+# `pool/{frame_id}.jpg` directory replacing `hist_*/fut_*` tar members. The
+# loader requires pool/ when window_index.json is present.
 # v3: added pose.npy (absolute lat/lon/heading/timestamp) and gps.npy (current +
 # 64 future lat/lon points) for datasets with geospatial source fields.
 # v4: emits dataset-level geo paths, sample-pose parquet, and privacy-filtered
 # heatmaps for every GPS-capable parser, including KITScenes partitions.
 # v5: KITScenes stores lossless semantic-map and selected-route tensors plus
-# scene-level canonical navigation vectors; it no longer stores map.jpg.
+# scene-level canonical navigation vectors instead of map.jpg.
 # v6: KITScenes adds the loss-only route_supervision.npz member derived from the
 # canonical selected lane sequence.
 # v7: route_supervision.npz also stores the loss-only drivable outside-distance
 # field derived from the semantic drivable-area channel.
 # v8: route_supervision.npz explicitly stores drivable-field availability so
 # training never infers supervision validity from distance values.
-SHARD_SCHEMA_VERSION = "v8"
+# v9: adds deterministic trajectory_xy.npz, optional bev_segmentation.npz, and
+# the sample_navigation_v3 semantic Map/Route members used by Reactive stages.
+# v10: standardizes six 512px camera encodings, stores native 1024px CAM_F0,
+# adds bev_hist_<t>_cam_<v>.jpg for seven history frames, and extends calib.json
+# with front_projection, history_projection, temporal_frame_offsets,
+# temporal_frame_interval_us, and front_camera_*. Rig-constant projection and
+# provenance live once in manifest.json/rig/projection.json.
+# v11: adds the base-resolution Front companion used by the stateful FPN cache.
+# v12: KITScenes stores an exact 0.5-second T8 history pool index and per-sample
+# current-ego-aligned historical camera projection matrices.
+# v13: KITScenes adds pose-space trajectory targets, native 1024px current Front
+# images with a 512px FPN companion, an immutable frame-pool archive, and
+# complete Reactive manifest provenance.
+SHARD_SCHEMA_VERSION = "v13"
 
 # Calibration / projection spec encoding and raster-map coordinate semantics.
 # v2 queries KITScenes maps in the scene-local pose frame and applies the map
 # origin exactly once when publishing absolute geographic coordinates.
 # v3 aligns the semantic navigation raster and camera BEV to the audited
 # one-meter geometry with the existing rear-third ego anchor.
-GEOMETRY_VERSION = "v3"
+# v4 adds the shared Reactive geometry: 450 x 300 cells at 0.4 m/px with the
+# exact camera-BEV pc_range, used by nuPlan and L2D target artifacts.
+# v5 replaces L2D pseudo geometry with pinned RDF extrinsics and FOV-derived
+# pinhole intrinsics, and standardizes six-camera semantic slot ordering.
+# v6 derives one square-pixel source focal length from L2D's vertical FOV,
+# then applies the source-to-packed resize instead of fitting incompatible
+# vendor horizontal and vertical angular extents independently.
+# v7 moves KITScenes navigation rasters onto the shared 450x300 AutoE2E grid and
+# records native-Front projection matrices alongside the 512px surround rig.
+GEOMETRY_VERSION = "v7"
 
 # Selection policy for the sparse reasoning-label subset. v2 adds the first
 # valid sample of every split group to the regular frame-index grid so even a
@@ -68,8 +94,7 @@ REASONING_LABEL_POLICY_VERSION = "v2"
 
 
 def contract_versions() -> dict:
-    """All contract versions as one dict — used in the DatasetSnapshot / cache key
-    and asserted single-sourced by the stability test."""
+    """All contract versions as one dict, used in the DatasetSnapshot cache key."""
     return {
         "uid_schema_version": UID_SCHEMA_VERSION,
         "parser_version": PARSER_VERSION,

@@ -1,4 +1,4 @@
-"""Tests for the World Model 1 Hz sequential windows (#16, enables JEPA #13).
+"""Tests for the World Model 1 Hz sequential windows used by JEPA.
 
 The windowing logic is dataset-agnostic (takes a frame-loader callable), so it
 is fully tested here without the real lerobot/L2D dataset.
@@ -23,8 +23,6 @@ def _fake_loader(num_views=2):
     return load
 
 
-# --- stride_for_hz -------------------------------------------------------------
-
 def test_stride_10hz_to_1hz_is_10():
     assert stride_for_hz(10.0, 1.0) == 10
 
@@ -40,8 +38,6 @@ def test_stride_invalid_raises():
         with pytest.raises(ValueError):
             stride_for_hz(*bad)
 
-
-# --- window_offsets / required_margins ----------------------------------------
 
 def test_window_offsets_default():
     hist, fut = window_offsets(num_frames=4, stride=10)
@@ -61,8 +57,6 @@ def test_offsets_invalid_raises():
     with pytest.raises(ValueError):
         window_offsets(4, 0)
 
-
-# --- build_windows ------------------------------------------------------------
 
 def test_build_windows_shapes():
     hist, fut = build_windows(_fake_loader(num_views=7), row=64,

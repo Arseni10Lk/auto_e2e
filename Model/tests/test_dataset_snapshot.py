@@ -1,4 +1,4 @@
-"""Cache-provenance DatasetSnapshot (#121 Phase 2, §3.4a).
+"""Cache-provenance DatasetSnapshot.
 
 The fan-out's "ingest once, pack rarely" contract rests on the Flyte cache key
 carrying the REAL determinants of a stage's output. DatasetSnapshot is that key
@@ -91,7 +91,7 @@ def test_same_slice_reproduces_snapshot_cache_hit():
 
 def test_cache_key_fields_has_no_runtime_knobs():
     # The provenance must NOT carry episode count / num_workers / resources — only
-    # data-revision + code contracts (§3.4c). Guard the exact field set.
+    # data-revision + code contracts. Guard the exact field set.
     s = DatasetSnapshot.build("yaak-ai/L2D", "rev-1", [1])
     assert set(s.cache_key_fields()) == {
         "dataset", "source_revision", "metadata_digest",

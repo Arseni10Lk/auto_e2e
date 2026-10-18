@@ -15,16 +15,20 @@ class BezierPlanner(BasePlanner):
     precomputed Bernstein basis, into the full ``num_timesteps`` x
     ``num_signals`` trajectory. Because the trajectory is a linear combination
     of only ``num_controls`` control points, the resulting control-signal
-    profiles are smooth **by construction** (low jerk) with no post-processing
+    profiles are smooth by construction (low jerk) with no post-processing
     filter and no trainable smoothness penalty.
 
-    IMPORTANT — output semantics. The trajectory follows the repository's
-    official unicycle-dynamics contract: each of the ``num_signals`` channels
-    is a control signal, by default ``(acceleration, curvature)`` — NOT raw
-    Cartesian ``(x, y)`` waypoints. The Bezier smoothing is therefore applied
-    to the acceleration/curvature *profiles*, which is exactly what reduces
-    jerk and yields controller-friendly, physically feasible commands.
+    Output semantics follow the unicycle-dynamics contract: each of the
+    ``num_signals`` channels is a control signal, by default
+    ``(acceleration, curvature)``, not Cartesian ``(x, y)`` waypoints, so the
+    smoothing applies to the control profiles.
 
+    ``bev_features`` is the pooled fused-BEV feature vector
+    ``[B, feature_dim]`` produced by ``ReactiveE2E.FusedFeaturePooling``
+    (``75 * 50 = 3750`` by default), not a spatial ``[B, C, H, W]`` map. The
+    pooling module owns the resolution invariance; the planner concatenates the
+    pooled BEV vector with the ego-motion context and the zero-init projected
+    visual history.
     """
 
     def __init__(self, feature_dim = 3750, embed_dim = 256, num_timesteps=64, num_signals=2,
@@ -42,6 +46,7 @@ class BezierPlanner(BasePlanner):
                 f"({num_timesteps})."
             )
       
+        self.feature_dim = feature_dim
         self.num_timesteps = num_timesteps
         self.num_signals = num_signals
         self.num_controls = num_controls
@@ -50,21 +55,10 @@ class BezierPlanner(BasePlanner):
         self.combined_feature_dim = feature_dim + egomotion_dim + visual_history_dim
         self.reduced_combined_feature_dim = int(self.combined_feature_dim/2)
 
-        # Context aggregation: ego state + visual history + global BEV summary.
         self.visual_history_proj = nn.Linear(visual_history_dim, visual_history_dim)
-
-
-
-        # Zero-init the visual-history projection so the World-Model-derived
-        # visual_history starts as a STRICT no-op and the planner learns to open
-        # it only as the WM matures — mirroring the reasoning branch's zero-init
-        # coupling (alpha=0). Rationale (#13): with the WM on, visual_history is a
-        # non-stationary WM output; a default-init projection makes the planner
-        # depend on that moving, partly-eval-unavailable signal from step 0, which
-        # empirically made the full 3-branch model slightly WORSE than the
-        # imitation baseline (visual_history=zeros). Zero-init makes the WM branch
-        # strictly additive: the planner is identical to the imitation baseline at
-        # init and can only improve as it learns to use a trained visual_history.
+        # Zero-init so the world-model visual_history starts as a no-op: it is a
+        # non-stationary signal, and the planner matches the imitation baseline
+        # at init until it learns to use it.
         nn.init.zeros_(self.visual_history_proj.weight)
         nn.init.zeros_(self.visual_history_proj.bias)
         self.context_mlp = nn.Sequential(
@@ -73,15 +67,17 @@ class BezierPlanner(BasePlanner):
             nn.Linear(self.reduced_combined_feature_dim, self.reduced_combined_feature_dim),
         )
 
-        # Reasoning coupling (zero-init; no-op at init). Injects the reasoning
-        # branch into the planner context before the control head.
-        self.reasoning_coupling = ReasoningCoupling(embed_dim, mode=reasoning_mode)
+        # The concatenated context is wider than the reasoning width, so the
+        # coupling projects its residual into it.
+        self.reasoning_coupling = ReasoningCoupling(
+            embed_dim,
+            mode=reasoning_mode,
+            context_dim=self.combined_feature_dim,
+        )
 
-        # Predict (num_controls x num_signals) Bezier control points.
         self.control_head = nn.Linear(self.reduced_combined_feature_dim, num_controls * num_signals)
 
-
-        # Fixed Bernstein basis [num_timesteps, num_controls] (no scipy).
+        # Fixed Bernstein basis [num_timesteps, num_controls].
         self.register_buffer(
             "bernstein_basis",
             self._bernstein_basis(num_timesteps, num_controls),
@@ -93,8 +89,7 @@ class BezierPlanner(BasePlanner):
         """Bernstein polynomial basis B_{i,n}(t), n = num_controls - 1.
 
         Returns a [num_points, num_controls] matrix evaluated on a uniform
-        grid t in [0, 1]. Uses ``math.comb`` from the standard library, so
-        there is no ``scipy`` dependency.
+        grid t in [0, 1].
         """
         n = num_controls - 1
         t = torch.linspace(0.0, 1.0, num_points).unsqueeze(1)          # [P, 1]
@@ -112,7 +107,8 @@ class BezierPlanner(BasePlanner):
                 **kwargs):
         """
         Args:
-            bev_features: [B, embed_dim, H, W] — any spatial resolution.
+            bev_features: [B, feature_dim] pooled fused-BEV vector (see
+                ``FusedFeaturePooling``).
             visual_history: [B, visual_history_dim].
             egomotion_history: [B, egomotion_dim].
             reasoning_latent: optional [B, embed_dim] pooled reasoning latent
@@ -134,14 +130,20 @@ class BezierPlanner(BasePlanner):
                 f"got tensor of shape {tuple(egomotion_history.shape)}."
             )
 
+        if bev_features.dim() != 2 or bev_features.shape[-1] != self.feature_dim:
+            raise ValueError(
+                f"bev_features must be a pooled [B, {self.feature_dim}] vector "
+                f"(see FusedFeaturePooling), got tensor of shape "
+                f"{tuple(bev_features.shape)}."
+            )
+
         B = bev_features.shape[0]
 
         context = torch.cat((
-            bev_features, 
-            egomotion_history, 
-            visual_history), dim=1)
-        
-        # Zero-init reasoning residual (no-op at init; see ReasoningCoupling).
+            bev_features,
+            egomotion_history,
+            self.visual_history_proj(visual_history)), dim=1)
+
         context = self.reasoning_coupling(
             context,
             reasoning_latent=reasoning_latent,

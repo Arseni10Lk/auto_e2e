@@ -19,15 +19,6 @@ _DATASET_WORKFLOWS = {
     "pipelines.workflows.wf_create_dataset_sharded",
     "Platform.pipelines.workflows.wf_create_dataset_sharded",
 }
-_RECOVERY_WORKFLOWS = {
-    "pipelines.workflows.wf_recovered_kitscenes_full_run",
-    "Platform.pipelines.workflows.wf_recovered_kitscenes_full_run",
-}
-_REPACK_WORKFLOWS = {
-    "pipelines.workflows.wf_repack_existing_kitscenes",
-    "Platform.pipelines.workflows.wf_repack_existing_kitscenes",
-}
-_WORKFLOW_RUNNING = 2
 _WORKFLOW_SUCCEEDED = 4
 _NODE_SUCCEEDED = 3
 
@@ -75,46 +66,17 @@ def validate_full_run_inputs(
         raise ValueError("Full Run model was trained without the world-model branch")
 
 
-def validate_recovery_inputs(
-    inputs: Mapping[str, Any],
-    *,
-    expected_dataset_version: str,
-) -> None:
-    """Reject recovery runs that do not identify audited KITScenes artifacts."""
-    dataset_version = str(_required_input(inputs, "dataset_version"))
-    if dataset_version != expected_dataset_version:
-        raise ValueError(
-            "recovery dataset_version is "
-            f"{dataset_version!r}, expected {expected_dataset_version!r}"
-        )
-    artifact_set_sha256 = str(
-        _required_input(inputs, "artifact_set_sha256")
-    )
-    if not re.fullmatch(r"[0-9a-f]{64}", artifact_set_sha256):
-        raise ValueError(
-            "recovery artifact_set_sha256 is not a lowercase SHA-256"
-        )
-    recovery_manifest = str(_required_input(inputs, "recovery_manifest"))
-    if not recovery_manifest.startswith("s3://"):
-        raise ValueError("recovery_manifest is not an immutable S3 artifact")
-
-
 def dataset_node_id(execution: Any) -> str:
     """Find the dataset subworkflow node without depending on its compiled ID."""
     workflow = execution.flyte_workflow
     workflow_name = str(getattr(getattr(workflow, "id", None), "name", ""))
-    if workflow_name in _FULL_RUN_WORKFLOWS:
-        expected_entities = _DATASET_WORKFLOWS
-        expected_metadata = "wf_create_dataset_sharded"
-    elif workflow_name in _RECOVERY_WORKFLOWS:
-        expected_entities = _REPACK_WORKFLOWS
-        expected_metadata = "wf_repack_existing_kitscenes"
-    else:
+    if workflow_name not in _FULL_RUN_WORKFLOWS:
         raise ValueError(
             "execution workflow is "
-            f"{workflow_name!r}, expected a supported full-run or recovery "
-            "workflow"
+            f"{workflow_name!r}, expected a supported full-run workflow"
         )
+    expected_entities = _DATASET_WORKFLOWS
+    expected_metadata = "wf_create_dataset_sharded"
 
     matches = []
     for node in workflow.flyte_nodes:
@@ -176,7 +138,6 @@ def build_overlay_inputs(
     expected_dataset: str,
     expected_dataset_version: str,
     allow_partial: bool = False,
-    allow_running_recovery: bool = False,
 ) -> dict[str, Any]:
     if not _EXECUTION_ID_RE.fullmatch(execution_id):
         raise ValueError(f"invalid Flyte execution ID {execution_id!r}")
@@ -189,23 +150,12 @@ def build_overlay_inputs(
             "",
         )
     )
-    phase = int(execution.closure.phase)
-    running_recovery = (
-        workflow_name in _RECOVERY_WORKFLOWS
-        and allow_running_recovery
-        and phase == _WORKFLOW_RUNNING
-    )
-    if phase != _WORKFLOW_SUCCEEDED and not running_recovery:
+    if int(execution.closure.phase) != _WORKFLOW_SUCCEEDED:
         raise ValueError(
             f"dataset-producing workflow {execution_id} is not SUCCEEDED "
             f"(phase={execution.closure.phase})"
         )
-    if workflow_name in _RECOVERY_WORKFLOWS:
-        validate_recovery_inputs(
-            execution.inputs,
-            expected_dataset_version=expected_dataset_version,
-        )
-    elif workflow_name in _FULL_RUN_WORKFLOWS:
+    if workflow_name in _FULL_RUN_WORKFLOWS:
         validate_full_run_inputs(
             execution.inputs,
             expected_dataset=expected_dataset,
@@ -259,14 +209,6 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Allow episodes>0 for smoke validation only.",
     )
-    parser.add_argument(
-        "--allow-running-recovery",
-        action="store_true",
-        help=(
-            "Allow a running recovery parent after its repack subworkflow "
-            "has succeeded."
-        ),
-    )
     return parser.parse_args()
 
 
@@ -287,7 +229,6 @@ def main() -> None:
         expected_dataset=args.expected_dataset,
         expected_dataset_version=args.expected_dataset_version,
         allow_partial=args.allow_partial,
-        allow_running_recovery=args.allow_running_recovery,
     )
     output = Path(args.output)
     output.write_text(json.dumps(payload, indent=2) + "\n")
