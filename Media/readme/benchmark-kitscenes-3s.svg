@@ -1,0 +1,86 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="636" viewBox="0 0 1000 636" role="img" aria-labelledby="title desc">
+  <title id="title">Open-loop error at 3 s on KITScenes-Multimodal validation</title>
+  <desc id="desc">ADE and FDE at 3 s in metres, lower is better. Qwen Drive 1.0: ADE 0.565 m, FDE 1.397 m; AutoE2E fine-tuned (kitscenes-epoch-5): ADE 0.744 m, FDE 1.980 m; SimForge: ADE 0.831 m, FDE 2.209 m; AutoE2E (nuplan-epoch-5, zero-shot): ADE 0.915 m, FDE 2.423 m; Alpamayo 1.5: ADE 1.020 m, FDE 2.820 m; VAD: ADE 1.242 m, FDE 2.821 m; METEOR: ADE 1.240 m, FDE 3.282 m; Drive-JEPA: ADE 2.266 m, FDE 4.774 m.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#140f2a"/>
+      <stop offset="1" stop-color="#0a2027"/>
+    </linearGradient>
+    <linearGradient id="brand" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#c084fc"/>
+      <stop offset="1" stop-color="#5ee0d6"/>
+    </linearGradient>
+    <style>
+      text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
+      .lg { fill: #c7d2e4; font-size: 15px; font-weight: 600; }
+      .note { fill: #8b97ad; font-size: 13px; }
+      .m { fill: #c7d2e4; font-size: 16px; font-weight: 600; }
+      .me { fill: #ffffff; font-size: 16px; font-weight: 800; }
+      .sub { fill: #8b97ad; font-size: 13px; }
+      .v { fill: #c7d2e4; font-size: 13px; font-variant-numeric: tabular-nums; }
+      .ve { fill: #ffffff; font-size: 13px; font-weight: 700; font-variant-numeric: tabular-nums; }
+      .ax { fill: #8b97ad; font-size: 13px; font-variant-numeric: tabular-nums; }
+    </style>
+  </defs>
+  <rect x="1" y="1" width="998" height="634" rx="20" fill="url(#bg)" stroke="url(#brand)" stroke-opacity="0.4"/>
+  <rect x="36" y="34" width="14" height="14" rx="3" fill="#0fa89e"/>
+  <text x="58" y="46" class="lg">ADE, mean error over 3 s</text>
+  <rect x="262" y="34" width="14" height="14" rx="3" fill="#a24bf5"/>
+  <text x="284" y="46" class="lg">FDE, error at 3 s</text>
+  <text x="964" y="46" text-anchor="end" class="note">metres, lower is better</text>
+  <rect x="20" y="151" width="960" height="50" rx="12" fill="url(#brand)" fill-opacity="0.10"/>
+  <rect x="20" y="161" width="3" height="30" rx="1.5" fill="url(#brand)"/>
+  <rect x="20" y="263" width="960" height="50" rx="12" fill="url(#brand)" fill-opacity="0.10"/>
+  <rect x="20" y="273" width="3" height="30" rx="1.5" fill="url(#brand)"/>
+  <path d="M390 86V544M518 86V544M646 86V544M774 86V544M902 86V544" stroke="#ffffff" stroke-opacity="0.08"/>
+  <path d="M262 86V544" stroke="#ffffff" stroke-opacity="0.35"/>
+  <text x="262" y="564" text-anchor="middle" class="ax">0 m</text>
+  <text x="390" y="564" text-anchor="middle" class="ax">1 m</text>
+  <text x="518" y="564" text-anchor="middle" class="ax">2 m</text>
+  <text x="646" y="564" text-anchor="middle" class="ax">3 m</text>
+  <text x="774" y="564" text-anchor="middle" class="ax">4 m</text>
+  <text x="902" y="564" text-anchor="middle" class="ax">5 m</text>
+  <text x="36" y="125" class="m">Qwen Drive 1.0</text>
+  <path d="M262 103.0h68.32a4 4 0 0 1 4 4v8a4 4 0 0 1 -4 4h-68.32z" fill="#0fa89e"><title>Qwen Drive 1.0: ADE at 3 s = 0.565 m</title></path>
+  <text x="342.3" y="115.5" class="v">0.57</text>
+  <path d="M262 121.0h174.82a4 4 0 0 1 4 4v8a4 4 0 0 1 -4 4h-174.82z" fill="#a24bf5"><title>Qwen Drive 1.0: FDE at 3 s = 1.397 m</title></path>
+  <text x="448.8" y="133.5" class="v">1.40</text>
+  <text x="36" y="174" class="me">AutoE2E fine-tuned</text>
+  <text x="36" y="191" class="sub">kitscenes-epoch-5</text>
+  <path d="M262 159.0h91.23a4 4 0 0 1 4 4v8a4 4 0 0 1 -4 4h-91.23z" fill="#0fa89e"><title>AutoE2E fine-tuned: ADE at 3 s = 0.744 m</title></path>
+  <text x="365.2" y="171.5" class="ve">0.74</text>
+  <path d="M262 177.0h249.44a4 4 0 0 1 4 4v8a4 4 0 0 1 -4 4h-249.44z" fill="#a24bf5"><title>AutoE2E fine-tuned: FDE at 3 s = 1.980 m</title></path>
+  <text x="523.4" y="189.5" class="ve">1.98</text>
+  <text x="36" y="237" class="m">SimForge</text>
+  <path d="M262 215.0h102.37a4 4 0 0 1 4 4v8a4 4 0 0 1 -4 4h-102.37z" fill="#0fa89e"><title>SimForge: ADE at 3 s = 0.831 m</title></path>
+  <text x="376.4" y="227.5" class="v">0.83</text>
+  <path d="M262 233.0h278.75a4 4 0 0 1 4 4v8a4 4 0 0 1 -4 4h-278.75z" fill="#a24bf5"><title>SimForge: FDE at 3 s = 2.209 m</title></path>
+  <text x="552.8" y="245.5" class="v">2.21</text>
+  <text x="36" y="286" class="me">AutoE2E</text>
+  <text x="36" y="303" class="sub">nuplan-epoch-5, zero-shot</text>
+  <path d="M262 271.0h113.12a4 4 0 0 1 4 4v8a4 4 0 0 1 -4 4h-113.12z" fill="#0fa89e"><title>AutoE2E: ADE at 3 s = 0.915 m</title></path>
+  <text x="387.1" y="283.5" class="ve">0.92</text>
+  <path d="M262 289.0h306.14a4 4 0 0 1 4 4v8a4 4 0 0 1 -4 4h-306.14z" fill="#a24bf5"><title>AutoE2E: FDE at 3 s = 2.423 m</title></path>
+  <text x="580.1" y="301.5" class="ve">2.42</text>
+  <text x="36" y="349" class="m">Alpamayo 1.5</text>
+  <path d="M262 327.0h126.56a4 4 0 0 1 4 4v8a4 4 0 0 1 -4 4h-126.56z" fill="#0fa89e"><title>Alpamayo 1.5: ADE at 3 s = 1.020 m</title></path>
+  <text x="400.6" y="339.5" class="v">1.02</text>
+  <path d="M262 345.0h356.96a4 4 0 0 1 4 4v8a4 4 0 0 1 -4 4h-356.96z" fill="#a24bf5"><title>Alpamayo 1.5: FDE at 3 s = 2.820 m</title></path>
+  <text x="631.0" y="357.5" class="v">2.82</text>
+  <text x="36" y="405" class="m">VAD</text>
+  <path d="M262 383.0h154.98a4 4 0 0 1 4 4v8a4 4 0 0 1 -4 4h-154.98z" fill="#0fa89e"><title>VAD: ADE at 3 s = 1.242 m</title></path>
+  <text x="429.0" y="395.5" class="v">1.24</text>
+  <path d="M262 401.0h357.09a4 4 0 0 1 4 4v8a4 4 0 0 1 -4 4h-357.09z" fill="#a24bf5"><title>VAD: FDE at 3 s = 2.821 m</title></path>
+  <text x="631.1" y="413.5" class="v">2.82</text>
+  <text x="36" y="461" class="m">METEOR</text>
+  <path d="M262 439.0h154.72a4 4 0 0 1 4 4v8a4 4 0 0 1 -4 4h-154.72z" fill="#0fa89e"><title>METEOR: ADE at 3 s = 1.240 m</title></path>
+  <text x="428.7" y="451.5" class="v">1.24</text>
+  <path d="M262 457.0h416.10a4 4 0 0 1 4 4v8a4 4 0 0 1 -4 4h-416.10z" fill="#a24bf5"><title>METEOR: FDE at 3 s = 3.282 m</title></path>
+  <text x="690.1" y="469.5" class="v">3.28</text>
+  <text x="36" y="517" class="m">Drive-JEPA</text>
+  <path d="M262 495.0h286.05a4 4 0 0 1 4 4v8a4 4 0 0 1 -4 4h-286.05z" fill="#0fa89e"><title>Drive-JEPA: ADE at 3 s = 2.266 m</title></path>
+  <text x="560.0" y="507.5" class="v">2.27</text>
+  <path d="M262 513.0h607.07a4 4 0 0 1 4 4v8a4 4 0 0 1 -4 4h-607.07z" fill="#a24bf5"><title>Drive-JEPA: FDE at 3 s = 4.774 m</title></path>
+  <text x="881.1" y="525.5" class="v">4.77</text>
+  <text x="36" y="606" class="note">Open-loop predictions on KITScenes-Multimodal validation (117 scenes). Settings and sample sets per model: issue #210.</text>
+</svg>
