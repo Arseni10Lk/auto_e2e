@@ -65,6 +65,27 @@ AutoE2E is three cooperating models. The **Reactive model** runs at 10 Hz and dr
 
 The read-only [DataModelConsole dashboard](https://d2itskdqq39tx1.cloudfront.net/) replays synchronized camera scenes with ground-truth and predicted trajectories in camera and bird's-eye views, next to dataset versions, MLflow models and Flyte executions.
 
+<img src="./Media/readme/section-benchmarks.svg" alt="Benchmarks" width="100%">
+
+<p align="center">
+  <img src="./Media/readme/benchmark-kitscenes-3s.svg" alt="ADE and FDE at 3 s on KITScenes-Multimodal validation for eight open-weights driving models. The fine-tuned AutoE2E checkpoint is second, behind Qwen Drive 1.0." width="100%">
+</p>
+
+The fine-tuned AutoE2E checkpoint has the second-lowest error of the eight open-weights models we benchmarked on KITScenes-Multimodal validation. Only Qwen Drive 1.0 is ahead, and AutoE2E beats SimForge, Alpamayo 1.5 and METEOR with 79.9 M parameters. All models are scored open-loop: each one predicts the next 3 s from logged camera frames, and the prediction is compared with the path the human driver took. ADE is the average position error over those 3 s and FDE is the error at the 3 s point.
+
+| Model | Checkpoint / setting | Evaluated on | ADE @ 3 s (m) | FDE @ 3 s (m) |
+|---|---|---|---:|---:|
+| Qwen Drive 1.0 | first of 6 trajectories | 202 keyframes | 0.565 | 1.397 |
+| **AutoE2E fine-tuned** | [`kitscenes-epoch-5`](https://huggingface.co/AutowareFoundation/auto_e2e/tree/main/models/kitscenes-epoch-5) | 202 keyframes | **0.744** | **1.980** |
+| SimForge D1.5 | 7 camera slots (2 virtual telephoto), first of 6 trajectories | 202 keyframes | 0.831 | 2.209 |
+| **AutoE2E** | [`nuplan-epoch-5`](https://huggingface.co/AutowareFoundation/auto_e2e/tree/main/models/nuplan-epoch-5), zero-shot | 11,035 samples | **0.915** | **2.423** |
+| Alpamayo 1.5 | first of 6 trajectories | 202 keyframes | 1.020 | 2.820 |
+| VAD | Base stage-2, oracle driving command | 11,035 samples | 1.242 | 2.821 |
+| METEOR | top-1 of 3 paths | 202 keyframes | 1.240 | 3.282 |
+| Drive-JEPA | perception-based v2, 20 m route command | 11,035 samples | 2.266 | 4.774 |
+
+The 11,035 samples are every frame of the 117 validation scenes, and the 202 keyframes are non-overlapping anchors taken from the same scenes. Inputs differ by model: AutoE2E also gets an HD map and the route, and VAD and Drive-JEPA get a driving command. [Issue #210](https://github.com/autowarefoundation/auto_e2e/issues/210) has each model's adapter, ground truth and results at the other horizons.
+
 <img src="./Media/readme/section-get-started.svg" alt="Get started" width="100%">
 
 **1. Install** with Python 3.12 (the pinned PyTorch build has no wheels for 3.13+).

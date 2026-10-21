@@ -19,7 +19,7 @@
   </defs>
   <circle class="ping" cx="26" cy="39" r="13" fill="none" stroke="#f5b041" stroke-width="2"/>
   <circle cx="26" cy="39" r="13" fill="#f5b041" fill-opacity="0.16" stroke="#f5b041" stroke-width="2"/>
-  <text x="26" y="44.5" text-anchor="middle" class="num" style="font-size:12px;letter-spacing:0">04</text>
+  <text x="26" y="44.5" text-anchor="middle" class="num" style="font-size:12px;letter-spacing:0">05</text>
   <text x="56" y="44" class="h">Join the community</text>
   <text x="371" y="44" class="s">Built in the open by the Autoware Foundation</text>
   <rect x="56" y="62" width="940" height="2" rx="1" fill="url(#line)"/>
