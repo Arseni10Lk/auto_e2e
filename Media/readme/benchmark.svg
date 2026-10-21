@@ -1,0 +1,257 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="664" viewBox="0 0 1000 664" role="img" aria-labelledby="title desc">
+  <title id="title">Error compared to human driving on KITScenes-Multimodal (ADE and FDE at 3 s, metres, smaller is better)</title>
+  <desc id="desc">Qwen-Drive 1.0: ADE 0.565 m, FDE 1.40 m; AutoE2E Finetuned: ADE 0.744 m, FDE 1.98 m; SimForge: ADE 0.831 m, FDE 2.21 m; AutoE2E: ADE 0.915 m, FDE 2.42 m; Alpamayo 1.5: ADE 1.02 m, FDE 2.82 m; VAD: ADE 1.24 m, FDE 2.82 m; METEOR: ADE 1.24 m, FDE 3.28 m; Drive-JEPA: ADE 2.27 m, FDE 4.77 m. AutoE2E Finetuned is the KITScenes Epoch 5 checkpoint; AutoE2E is the nuPlan Epoch 5 checkpoint evaluated zero-shot.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#14102a"/><stop offset="0.55" stop-color="#101a2e"/><stop offset="1" stop-color="#0b2430"/>
+    </linearGradient>
+    <linearGradient id="brand" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#a24bf5"/><stop offset="1" stop-color="#5ee0d6"/>
+    </linearGradient>
+    <linearGradient id="edge" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#a24bf5"/><stop offset="0.5" stop-color="#f472b6"/><stop offset="1" stop-color="#5ee0d6"/>
+    </linearGradient>
+    <linearGradient id="slate" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#334063"/><stop offset="1" stop-color="#6f7fa3"/>
+    </linearGradient>
+    <linearGradient id="band" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#a24bf5" stop-opacity="0.26"/><stop offset="0.6" stop-color="#5ee0d6" stop-opacity="0.08"/><stop offset="1" stop-color="#5ee0d6" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="sheen" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0"/><stop offset="0.5" stop-color="#ffffff" stop-opacity="0.55"/><stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="shine" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0"/><stop offset="0.5" stop-color="#ffffff" stop-opacity="0.06"/><stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+    <radialGradient id="orbTeal" cx="0.5" cy="0.5" r="0.5"><stop offset="0" stop-color="#5ee0d6" stop-opacity="0.16"/><stop offset="1" stop-color="#5ee0d6" stop-opacity="0"/></radialGradient>
+    <radialGradient id="orbPurple" cx="0.5" cy="0.5" r="0.5"><stop offset="0" stop-color="#a24bf5" stop-opacity="0.18"/><stop offset="1" stop-color="#a24bf5" stop-opacity="0"/></radialGradient>
+    <filter id="glow" filterUnits="userSpaceOnUse" x="0" y="0" width="1000" height="664">
+      <feGaussianBlur in="SourceGraphic" stdDeviation="6" result="blur"/>
+      <feColorMatrix in="blur" type="matrix" values="1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 0.75 0" result="soft"/>
+      <feMerge><feMergeNode in="soft"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <clipPath id="card"><rect x="2" y="2" width="996" height="660" rx="22"/></clipPath>
+    <clipPath id="clip-a"><rect x="268" y="166" width="350" height="428"/></clipPath>
+    <clipPath id="clip-f"><rect x="640" y="166" width="350" height="428"/></clipPath>
+    <clipPath id="bar-a1"><rect x="268" y="248.0" width="83.33" height="18" rx="9.0"/></clipPath>
+    <clipPath id="bar-f1"><rect x="640" y="248.0" width="110.88" height="18" rx="9.0"/></clipPath>
+    <clipPath id="bar-a3"><rect x="268" y="348.0" width="102.48" height="18" rx="9.0"/></clipPath>
+    <clipPath id="bar-f3"><rect x="640" y="348.0" width="135.52" height="18" rx="9.0"/></clipPath>
+    <style>
+      .num { font-variant-numeric: tabular-nums; }
+      .ride { animation: ride 9s infinite both; }
+      .fade { animation: ride 9s infinite both, fade 9s infinite both; }
+      @keyframes ride {
+        0% { transform: translateX(var(--d)); animation-timing-function: cubic-bezier(.16, 1, .3, 1); }
+        16%, 89% { transform: translateX(0); animation-timing-function: cubic-bezier(.7, 0, .84, 0); }
+        97%, 100% { transform: translateX(var(--d)); }
+      }
+      @keyframes fade { 0% { opacity: 0; } 5%, 90% { opacity: 1; } 96%, 100% { opacity: 0; } }
+      .sheen { animation: sheen 3.6s cubic-bezier(.45, 0, .25, 1) infinite; }
+      @keyframes sheen { 0% { transform: translateX(0); } 70%, 100% { transform: translateX(380px); } }
+      .band { animation: breathe 3.2s ease-in-out infinite; }
+      @keyframes breathe { 0%, 100% { opacity: .6; } 50% { opacity: 1; } }
+      .ping { animation: ping 2.4s ease-out infinite; transform-box: fill-box; transform-origin: center; }
+      @keyframes ping { 0% { transform: scale(1); opacity: .85; } 100% { transform: scale(1.9); opacity: 0; } }
+      .shine { animation: sweep 8s ease-in-out infinite; }
+      @keyframes sweep { 0% { transform: translateX(-460px); } 55%, 100% { transform: translateX(1300px); } }
+      .orb1 { animation: drift1 14s ease-in-out infinite alternate; }
+      .orb2 { animation: drift2 17s ease-in-out infinite alternate; }
+      @keyframes drift1 { to { transform: translate(-70px, 40px); } }
+      @keyframes drift2 { to { transform: translate(90px, -50px); } }
+      .a0 { --d: -63.28px; animation-delay: 0.25s; }
+      .f0 { --d: -78.40px; animation-delay: 0.40s; }
+      .a1 { --d: -83.33px; animation-delay: 0.33s; }
+      .f1 { --d: -110.88px; animation-delay: 0.48s; }
+      .a2 { --d: -93.07px; animation-delay: 0.41s; }
+      .f2 { --d: -123.76px; animation-delay: 0.56s; }
+      .a3 { --d: -102.48px; animation-delay: 0.49s; }
+      .f3 { --d: -135.52px; animation-delay: 0.64s; }
+      .a4 { --d: -114.24px; animation-delay: 0.57s; }
+      .f4 { --d: -157.92px; animation-delay: 0.72s; }
+      .a5 { --d: -138.88px; animation-delay: 0.65s; }
+      .f5 { --d: -157.92px; animation-delay: 0.80s; }
+      .a6 { --d: -138.88px; animation-delay: 0.73s; }
+      .f6 { --d: -183.68px; animation-delay: 0.88s; }
+      .a7 { --d: -254.24px; animation-delay: 0.81s; }
+      .f7 { --d: -267.12px; animation-delay: 0.96s; }
+      @media (prefers-reduced-motion: reduce) { * { animation: none !important; } }
+    </style>
+  </defs>
+  <g font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, Helvetica, Arial, sans-serif">
+  <rect x="2" y="2" width="996" height="660" rx="22" fill="url(#bg)"/>
+  <g clip-path="url(#card)">
+    <circle class="orb1" cx="880" cy="70" r="230" fill="url(#orbTeal)"/>
+    <circle class="orb2" cx="140" cy="600" r="260" fill="url(#orbPurple)"/>
+    <g class="shine"><rect x="0" y="0" width="360" height="664" fill="url(#shine)" transform="skewX(-18)"/></g>
+  </g>
+  <rect x="2" y="2" width="996" height="660" rx="22" fill="none" stroke="url(#edge)" stroke-opacity="0.55" stroke-width="1.5"/>
+  <text x="36" y="50" fill="#f472b6" font-size="12.5" font-weight="700" letter-spacing="3">ACCURACY BENCHMARK · KITSCENES-MULTIMODAL</text>
+  <text x="36" y="86" fill="#ffffff" font-size="28" font-weight="800">Error compared to human driving</text>
+  <text x="36" y="112" fill="#a9b6cc" font-size="14.5">Average and final displacement error at 3 s, in metres. Smaller is better.</text>
+  <rect x="776" y="70" width="22" height="10" rx="5" fill="url(#brand)" filter="url(#glow)"/>
+  <text x="806" y="79.5" fill="#e2e8f0" font-size="13" font-weight="700">AutoE2E</text>
+  <rect x="876" y="70" width="22" height="10" rx="5" fill="url(#slate)"/>
+  <text x="906" y="79.5" fill="#a9b6cc" font-size="13" font-weight="600">Other models</text>
+  <text x="268" y="158" fill="#e2e8f0" font-size="15" font-weight="800">ADE @ 3 s<tspan dx="8" fill="#8b97ad" font-size="12" font-weight="600">average displacement</tspan></text>
+  <path d="M268 176V584" stroke="#ffffff" stroke-opacity="0.16"/>
+  <text x="268" y="604" fill="#6b7891" font-size="11.5" font-weight="600" text-anchor="middle" class="num">0</text>
+  <path d="M324 176V584" stroke="#ffffff" stroke-opacity="0.06" stroke-dasharray="2 5"/>
+  <text x="324" y="604" fill="#6b7891" font-size="11.5" font-weight="600" text-anchor="middle" class="num">0.5</text>
+  <path d="M380 176V584" stroke="#ffffff" stroke-opacity="0.06" stroke-dasharray="2 5"/>
+  <text x="380" y="604" fill="#6b7891" font-size="11.5" font-weight="600" text-anchor="middle" class="num">1.0</text>
+  <path d="M436 176V584" stroke="#ffffff" stroke-opacity="0.06" stroke-dasharray="2 5"/>
+  <text x="436" y="604" fill="#6b7891" font-size="11.5" font-weight="600" text-anchor="middle" class="num">1.5</text>
+  <path d="M492 176V584" stroke="#ffffff" stroke-opacity="0.06" stroke-dasharray="2 5"/>
+  <text x="492" y="604" fill="#6b7891" font-size="11.5" font-weight="600" text-anchor="middle" class="num">2.0</text>
+  <path d="M548 176V584" stroke="#ffffff" stroke-opacity="0.06" stroke-dasharray="2 5"/>
+  <text x="548" y="604" fill="#6b7891" font-size="11.5" font-weight="600" text-anchor="middle" class="num">2.5 m</text>
+  <text x="640" y="158" fill="#e2e8f0" font-size="15" font-weight="800">FDE @ 3 s<tspan dx="8" fill="#8b97ad" font-size="12" font-weight="600">final displacement</tspan></text>
+  <path d="M640 176V584" stroke="#ffffff" stroke-opacity="0.16"/>
+  <text x="640" y="604" fill="#6b7891" font-size="11.5" font-weight="600" text-anchor="middle" class="num">0</text>
+  <path d="M696 176V584" stroke="#ffffff" stroke-opacity="0.06" stroke-dasharray="2 5"/>
+  <text x="696" y="604" fill="#6b7891" font-size="11.5" font-weight="600" text-anchor="middle" class="num">1</text>
+  <path d="M752 176V584" stroke="#ffffff" stroke-opacity="0.06" stroke-dasharray="2 5"/>
+  <text x="752" y="604" fill="#6b7891" font-size="11.5" font-weight="600" text-anchor="middle" class="num">2</text>
+  <path d="M808 176V584" stroke="#ffffff" stroke-opacity="0.06" stroke-dasharray="2 5"/>
+  <text x="808" y="604" fill="#6b7891" font-size="11.5" font-weight="600" text-anchor="middle" class="num">3</text>
+  <path d="M864 176V584" stroke="#ffffff" stroke-opacity="0.06" stroke-dasharray="2 5"/>
+  <text x="864" y="604" fill="#6b7891" font-size="11.5" font-weight="600" text-anchor="middle" class="num">4</text>
+  <path d="M920 176V584" stroke="#ffffff" stroke-opacity="0.06" stroke-dasharray="2 5"/>
+  <text x="920" y="604" fill="#6b7891" font-size="11.5" font-weight="600" text-anchor="middle" class="num">5 m</text>
+  <path d="M36 170H970" stroke="#ffffff" stroke-opacity="0.08"/>
+  <!-- 1. Qwen-Drive 1.0 -->
+  <circle cx="52" cy="207" r="13" fill="#1a2238" stroke="#3b4a66"/>
+  <text x="52" y="211.3" fill="#a9b6cc" font-size="12" font-weight="800" text-anchor="middle">1</text>
+  <text x="78" y="212.5" fill="#d5dceb" font-size="16" font-weight="700">Qwen-Drive 1.0</text>
+  <rect x="268" y="198.0" width="280" height="18" rx="9.0" fill="#ffffff" fill-opacity="0.04"/>
+  <g clip-path="url(#clip-a)">
+    <rect class="ride a0" x="268" y="198.0" width="63.28" height="18" rx="9.0" fill="url(#slate)"/>
+    <text class="fade num a0" x="341.28" y="212" fill="#c7d2e4" font-size="14" font-weight="700">0.565</text>
+  </g>
+  <rect x="640" y="198.0" width="280" height="18" rx="9.0" fill="#ffffff" fill-opacity="0.04"/>
+  <g clip-path="url(#clip-f)">
+    <rect class="ride f0" x="640" y="198.0" width="78.40" height="18" rx="9.0" fill="url(#slate)"/>
+    <text class="fade num f0" x="728.40" y="212" fill="#c7d2e4" font-size="14" font-weight="700">1.40</text>
+  </g>
+  <!-- 2. AutoE2E Finetuned -->
+  <rect class="band" x="24" y="235" width="952" height="44" rx="14" fill="url(#band)"/>
+  <rect x="24" y="241" width="3.5" height="32" rx="1.75" fill="url(#brand)"/>
+  <circle class="ping" cx="52" cy="257" r="13" fill="none" stroke="#c084fc" stroke-width="1.6"/>
+  <circle cx="52" cy="257" r="13" fill="url(#brand)"/>
+  <text x="52" y="261.3" fill="#0d0b1f" font-size="12" font-weight="800" text-anchor="middle">2</text>
+  <text x="78" y="256" fill="#ffffff" font-size="16" font-weight="800">AutoE2E Finetuned</text>
+  <text x="78" y="272" fill="#a9b6cc" font-size="11.5" font-weight="600">KITScenes Epoch 5, fine-tuned</text>
+  <rect x="268" y="248.0" width="280" height="18" rx="9.0" fill="#ffffff" fill-opacity="0.04"/>
+  <g clip-path="url(#clip-a)">
+    <g class="ride a1">
+      <rect x="268" y="248.0" width="83.33" height="18" rx="9.0" fill="url(#brand)" filter="url(#glow)"/>
+      <g clip-path="url(#bar-a1)"><rect class="sheen" x="198" y="248.0" width="70" height="18" fill="url(#sheen)"/></g>
+    </g>
+    <text class="fade num a1" x="361.33" y="262" fill="#ffffff" font-size="14.5" font-weight="800">0.744</text>
+  </g>
+  <rect x="640" y="248.0" width="280" height="18" rx="9.0" fill="#ffffff" fill-opacity="0.04"/>
+  <g clip-path="url(#clip-f)">
+    <g class="ride f1">
+      <rect x="640" y="248.0" width="110.88" height="18" rx="9.0" fill="url(#brand)" filter="url(#glow)"/>
+      <g clip-path="url(#bar-f1)"><rect class="sheen" x="570" y="248.0" width="70" height="18" fill="url(#sheen)"/></g>
+    </g>
+    <text class="fade num f1" x="760.88" y="262" fill="#ffffff" font-size="14.5" font-weight="800">1.98</text>
+  </g>
+  <!-- 3. SimForge -->
+  <circle cx="52" cy="307" r="13" fill="#1a2238" stroke="#3b4a66"/>
+  <text x="52" y="311.3" fill="#a9b6cc" font-size="12" font-weight="800" text-anchor="middle">3</text>
+  <text x="78" y="312.5" fill="#d5dceb" font-size="16" font-weight="700">SimForge</text>
+  <rect x="268" y="298.0" width="280" height="18" rx="9.0" fill="#ffffff" fill-opacity="0.04"/>
+  <g clip-path="url(#clip-a)">
+    <rect class="ride a2" x="268" y="298.0" width="93.07" height="18" rx="9.0" fill="url(#slate)"/>
+    <text class="fade num a2" x="371.07" y="312" fill="#c7d2e4" font-size="14" font-weight="700">0.831</text>
+  </g>
+  <rect x="640" y="298.0" width="280" height="18" rx="9.0" fill="#ffffff" fill-opacity="0.04"/>
+  <g clip-path="url(#clip-f)">
+    <rect class="ride f2" x="640" y="298.0" width="123.76" height="18" rx="9.0" fill="url(#slate)"/>
+    <text class="fade num f2" x="773.76" y="312" fill="#c7d2e4" font-size="14" font-weight="700">2.21</text>
+  </g>
+  <!-- 4. AutoE2E -->
+  <rect class="band" x="24" y="335" width="952" height="44" rx="14" fill="url(#band)"/>
+  <rect x="24" y="341" width="3.5" height="32" rx="1.75" fill="url(#brand)"/>
+  <circle class="ping" cx="52" cy="357" r="13" fill="none" stroke="#c084fc" stroke-width="1.6"/>
+  <circle cx="52" cy="357" r="13" fill="url(#brand)"/>
+  <text x="52" y="361.3" fill="#0d0b1f" font-size="12" font-weight="800" text-anchor="middle">4</text>
+  <text x="78" y="356" fill="#ffffff" font-size="16" font-weight="800">AutoE2E</text>
+  <text x="78" y="372" fill="#a9b6cc" font-size="11.5" font-weight="600">nuPlan Epoch 5, zero-shot</text>
+  <rect x="268" y="348.0" width="280" height="18" rx="9.0" fill="#ffffff" fill-opacity="0.04"/>
+  <g clip-path="url(#clip-a)">
+    <g class="ride a3">
+      <rect x="268" y="348.0" width="102.48" height="18" rx="9.0" fill="url(#brand)" filter="url(#glow)"/>
+      <g clip-path="url(#bar-a3)"><rect class="sheen" x="198" y="348.0" width="70" height="18" fill="url(#sheen)"/></g>
+    </g>
+    <text class="fade num a3" x="380.48" y="362" fill="#ffffff" font-size="14.5" font-weight="800">0.915</text>
+  </g>
+  <rect x="640" y="348.0" width="280" height="18" rx="9.0" fill="#ffffff" fill-opacity="0.04"/>
+  <g clip-path="url(#clip-f)">
+    <g class="ride f3">
+      <rect x="640" y="348.0" width="135.52" height="18" rx="9.0" fill="url(#brand)" filter="url(#glow)"/>
+      <g clip-path="url(#bar-f3)"><rect class="sheen" x="570" y="348.0" width="70" height="18" fill="url(#sheen)"/></g>
+    </g>
+    <text class="fade num f3" x="785.52" y="362" fill="#ffffff" font-size="14.5" font-weight="800">2.42</text>
+  </g>
+  <!-- 5. Alpamayo 1.5 -->
+  <circle cx="52" cy="407" r="13" fill="#1a2238" stroke="#3b4a66"/>
+  <text x="52" y="411.3" fill="#a9b6cc" font-size="12" font-weight="800" text-anchor="middle">5</text>
+  <text x="78" y="412.5" fill="#d5dceb" font-size="16" font-weight="700">Alpamayo 1.5</text>
+  <rect x="268" y="398.0" width="280" height="18" rx="9.0" fill="#ffffff" fill-opacity="0.04"/>
+  <g clip-path="url(#clip-a)">
+    <rect class="ride a4" x="268" y="398.0" width="114.24" height="18" rx="9.0" fill="url(#slate)"/>
+    <text class="fade num a4" x="392.24" y="412" fill="#c7d2e4" font-size="14" font-weight="700">1.02</text>
+  </g>
+  <rect x="640" y="398.0" width="280" height="18" rx="9.0" fill="#ffffff" fill-opacity="0.04"/>
+  <g clip-path="url(#clip-f)">
+    <rect class="ride f4" x="640" y="398.0" width="157.92" height="18" rx="9.0" fill="url(#slate)"/>
+    <text class="fade num f4" x="807.92" y="412" fill="#c7d2e4" font-size="14" font-weight="700">2.82</text>
+  </g>
+  <!-- 6. VAD -->
+  <circle cx="52" cy="457" r="13" fill="#1a2238" stroke="#3b4a66"/>
+  <text x="52" y="461.3" fill="#a9b6cc" font-size="12" font-weight="800" text-anchor="middle">6</text>
+  <text x="78" y="462.5" fill="#d5dceb" font-size="16" font-weight="700">VAD</text>
+  <rect x="268" y="448.0" width="280" height="18" rx="9.0" fill="#ffffff" fill-opacity="0.04"/>
+  <g clip-path="url(#clip-a)">
+    <rect class="ride a5" x="268" y="448.0" width="138.88" height="18" rx="9.0" fill="url(#slate)"/>
+    <text class="fade num a5" x="416.88" y="462" fill="#c7d2e4" font-size="14" font-weight="700">1.24</text>
+  </g>
+  <rect x="640" y="448.0" width="280" height="18" rx="9.0" fill="#ffffff" fill-opacity="0.04"/>
+  <g clip-path="url(#clip-f)">
+    <rect class="ride f5" x="640" y="448.0" width="157.92" height="18" rx="9.0" fill="url(#slate)"/>
+    <text class="fade num f5" x="807.92" y="462" fill="#c7d2e4" font-size="14" font-weight="700">2.82</text>
+  </g>
+  <!-- 7. METEOR -->
+  <circle cx="52" cy="507" r="13" fill="#1a2238" stroke="#3b4a66"/>
+  <text x="52" y="511.3" fill="#a9b6cc" font-size="12" font-weight="800" text-anchor="middle">7</text>
+  <text x="78" y="512.5" fill="#d5dceb" font-size="16" font-weight="700">METEOR</text>
+  <rect x="268" y="498.0" width="280" height="18" rx="9.0" fill="#ffffff" fill-opacity="0.04"/>
+  <g clip-path="url(#clip-a)">
+    <rect class="ride a6" x="268" y="498.0" width="138.88" height="18" rx="9.0" fill="url(#slate)"/>
+    <text class="fade num a6" x="416.88" y="512" fill="#c7d2e4" font-size="14" font-weight="700">1.24</text>
+  </g>
+  <rect x="640" y="498.0" width="280" height="18" rx="9.0" fill="#ffffff" fill-opacity="0.04"/>
+  <g clip-path="url(#clip-f)">
+    <rect class="ride f6" x="640" y="498.0" width="183.68" height="18" rx="9.0" fill="url(#slate)"/>
+    <text class="fade num f6" x="833.68" y="512" fill="#c7d2e4" font-size="14" font-weight="700">3.28</text>
+  </g>
+  <!-- 8. Drive-JEPA -->
+  <circle cx="52" cy="557" r="13" fill="#1a2238" stroke="#3b4a66"/>
+  <text x="52" y="561.3" fill="#a9b6cc" font-size="12" font-weight="800" text-anchor="middle">8</text>
+  <text x="78" y="562.5" fill="#d5dceb" font-size="16" font-weight="700">Drive-JEPA</text>
+  <rect x="268" y="548.0" width="280" height="18" rx="9.0" fill="#ffffff" fill-opacity="0.04"/>
+  <g clip-path="url(#clip-a)">
+    <rect class="ride a7" x="268" y="548.0" width="254.24" height="18" rx="9.0" fill="url(#slate)"/>
+    <text class="fade num a7" x="532.24" y="562" fill="#c7d2e4" font-size="14" font-weight="700">2.27</text>
+  </g>
+  <rect x="640" y="548.0" width="280" height="18" rx="9.0" fill="#ffffff" fill-opacity="0.04"/>
+  <g clip-path="url(#clip-f)">
+    <rect class="ride f7" x="640" y="548.0" width="267.12" height="18" rx="9.0" fill="url(#slate)"/>
+    <text class="fade num f7" x="917.12" y="562" fill="#c7d2e4" font-size="14" font-weight="700">4.77</text>
+  </g>
+  <text x="36" y="640" fill="#8b97ad" font-size="12">Ground truth is the logged human-driven trajectory. Model inputs and evaluation protocols are documented in auto_e2e issue #210.</text>
+  </g>
+</svg>

@@ -19,7 +19,7 @@
   </defs>
   <circle class="ping" cx="26" cy="39" r="13" fill="none" stroke="#5ee0d6" stroke-width="2"/>
   <circle cx="26" cy="39" r="13" fill="#5ee0d6" fill-opacity="0.16" stroke="#5ee0d6" stroke-width="2"/>
-  <text x="26" y="44.5" text-anchor="middle" class="num" style="font-size:12px;letter-spacing:0">03</text>
+  <text x="26" y="44.5" text-anchor="middle" class="num" style="font-size:12px;letter-spacing:0">04</text>
   <text x="56" y="44" class="h">Get started</text>
   <text x="256" y="44" class="s">Install, test and load the checkpoints</text>
   <rect x="56" y="62" width="940" height="2" rx="1" fill="url(#line)"/>

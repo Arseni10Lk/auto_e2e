@@ -65,6 +65,27 @@ AutoE2E is three cooperating models. The **Reactive model** runs at 10 Hz and dr
 
 The read-only [DataModelConsole dashboard](https://d2itskdqq39tx1.cloudfront.net/) replays synchronized camera scenes with ground-truth and predicted trajectories in camera and bird's-eye views, next to dataset versions, MLflow models and Flyte executions.
 
+<img src="./Media/readme/section-benchmark.svg" alt="Accuracy benchmark" width="100%">
+
+<p align="center">
+  <img src="./Media/readme/benchmark.svg" alt="Bar chart of ADE and FDE at 3 s on KITScenes-Multimodal, smaller is better: Qwen-Drive 1.0 0.565 / 1.40, AutoE2E Finetuned 0.744 / 1.98, SimForge 0.831 / 2.21, AutoE2E 0.915 / 2.42, Alpamayo 1.5 1.02 / 2.82, VAD 1.24 / 2.82, METEOR 1.24 / 3.28, Drive-JEPA 2.27 / 4.77" width="100%">
+</p>
+
+Error (m) compared to human driving on the KITScenes-Multimodal dataset; smaller is better.
+
+| Model | ADE @ 3 s | FDE @ 3 s |
+|---|---:|---:|
+| Qwen-Drive 1.0 | 0.565 | 1.40 |
+| **AutoE2E Finetuned** | **0.744** | **1.98** |
+| SimForge | 0.831 | 2.21 |
+| **AutoE2E** | **0.915** | **2.42** |
+| Alpamayo 1.5 | 1.02 | 2.82 |
+| VAD | 1.24 | 2.82 |
+| METEOR | 1.24 | 3.28 |
+| Drive-JEPA | 2.27 | 4.77 |
+
+AutoE2E Finetuned is the [`kitscenes-epoch-5`](https://huggingface.co/AutowareFoundation/auto_e2e/tree/main/models/kitscenes-epoch-5) checkpoint, and AutoE2E is the [`nuplan-epoch-5`](https://huggingface.co/AutowareFoundation/auto_e2e/tree/main/models/nuplan-epoch-5) checkpoint trained on nuPlan only. Each model's inputs and evaluation protocol are documented in [issue #210](https://github.com/autowarefoundation/auto_e2e/issues/210).
+
 <img src="./Media/readme/section-get-started.svg" alt="Get started" width="100%">
 
 **1. Install** with Python 3.12 (the pinned PyTorch build has no wheels for 3.13+).
