@@ -71,7 +71,7 @@ The read-only [DataModelConsole dashboard](https://d2itskdqq39tx1.cloudfront.net
   <img src="./Media/readme/benchmark-kitscenes-3s.svg" alt="ADE and FDE at 3 s on KITScenes-Multimodal validation for eight open-weights driving models. The fine-tuned AutoE2E checkpoint is second, behind Qwen Drive 1.0." width="100%">
 </p>
 
-The fine-tuned AutoE2E checkpoint has the second-lowest error of the eight open-weights models we benchmarked on KITScenes-Multimodal validation. Only Qwen Drive 1.0 is ahead, and AutoE2E beats SimForge, Alpamayo 1.5 and METEOR with 79.9 M parameters. All models are scored open-loop: each one predicts the next 3 s from logged camera frames, and the prediction is compared with the path the human driver took. ADE is the average position error over those 3 s and FDE is the error at the 3 s point.
+The fine-tuned AutoE2E checkpoint has the second-lowest error of the eight open-weights models compared here on KITScenes-Multimodal validation. Only Qwen Drive 1.0 is ahead, and AutoE2E beats SimForge, Alpamayo 1.5 and METEOR with 79.9 M parameters. All models are scored open-loop: each one predicts the next 3 s from logged camera frames, and the prediction is compared with the path the human driver took. ADE is the average position error over those 3 s and FDE is the error at the 3 s point.
 
 | Model | Checkpoint / setting | Evaluated on | ADE @ 3 s (m) | FDE @ 3 s (m) |
 |---|---|---|---:|---:|
