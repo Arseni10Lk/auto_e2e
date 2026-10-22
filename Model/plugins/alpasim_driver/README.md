@@ -87,9 +87,24 @@ The scene must render the rig's cameras. For KITScenes, that means a reconstruct
 
 ## Performance
 
-One prediction recomputes the BEV of all eight frames. On a laptop RTX 4050 that takes about 23 s per step, almost all of it in the BEVFormer view fusion; parsing takes 0.15 s. The model peaks at 2.1 GB of GPU memory. On CPU it takes about 10 minutes per step and 3.7 GB of RAM. The closed loop waits for the driver, so it still runs, only slowly.
+Measured with the nuPlan Epoch 5 checkpoint and `driver=autoe2e_nuplan` on the AlpaSim sample scene `clipgt-01d503d4`. The scene renders six cameras: `CAM_F0` at 1920×1080 and the other five at 960×540. The driver was measured on a Tesla V100-PCIE-16GB, and the renderer on an RTX 4050 Laptop GPU.
 
-The renderer and the driver share the GPU under `topology=1gpu`. On a 6 GB GPU the NuRec renderer leaves too little room for the model, so `driver.model.device=cpu` is needed there. With it, `driver=autoe2e_nuplan` and the nuPlan Epoch 5 checkpoint completed a closed-loop rollout of the AlpaSim sample scene `clipgt-01d503d4`. After the 7 s warm-up, AutoE2E made three decisions, and the rollout had no collision or off-road event.
+| Service | Peak GPU memory |
+| :--- | ---: |
+| AutoE2E driver (fp32) | 3.2 GiB per process, CUDA context included (PyTorch: 1.96 GiB allocated, 2.84 GiB reserved) |
+| NuRec renderer | 4.8 GiB |
+| Physics | 0.2 GiB |
+| **Closed loop on one GPU** (`topology=1gpu`) | **about 8.2 GiB** |
+
+| Step | V100 | RTX 4050 Laptop | CPU |
+| :--- | ---: | ---: | ---: |
+| AutoE2E decision | 10.5 s (19 s on the first call) | 23 s | 7.9 min, 3.7 GB RAM |
+| Render and physics, per 0.1 s step | | 0.32 s | |
+| Scene load | | 48 s | |
+
+One decision recomputes the BEV of all eight frames, and nearly all of that time is spent in the BEVFormer view fusion; parsing takes 0.15 s. fp16 autocast does not make it faster. AutoE2E decides every 0.1 s of simulated time, so the closed loop waits for the driver and runs about 100× slower than real time on a V100. A 20 s scene (the 7 s warm-up, then 130 decisions) takes about 24 minutes.
+
+The whole loop on one GPU therefore needs at least 10 GB. On a 6 GB GPU, run the driver on the CPU with `driver.model.device=cpu`. That is how `driver=autoe2e_nuplan` and the nuPlan Epoch 5 checkpoint completed a closed-loop rollout of `clipgt-01d503d4` on a laptop.
 
 ## Tests
 
