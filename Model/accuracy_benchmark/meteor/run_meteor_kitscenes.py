@@ -15,7 +15,7 @@ import sys
 import tarfile
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import cv2
 import matplotlib
@@ -249,15 +249,15 @@ def generate_overlays(
     N = len(samples_data)
 
     # Filter samples that have a valid 3s step (step 29)
-    valid_3s_indices = []
-    lat_displacements = []
+    valid_3s_list: List[int] = []
+    lat_list: List[float] = []
     for i in range(N):
         if samples_data[i]["gt_valid"][29]:
-            valid_3s_indices.append(i)
-            lat_displacements.append(abs(samples_data[i]["gt_mirror"][29, 1]))
+            valid_3s_list.append(i)
+            lat_list.append(abs(samples_data[i]["gt_mirror"][29, 1]))
 
-    valid_3s_indices = np.array(valid_3s_indices)
-    lat_displacements = np.array(lat_displacements)
+    valid_3s_indices = np.array(valid_3s_list)
+    lat_displacements = np.array(lat_list)
 
     # Sort by lateral displacement
     sort_order = np.argsort(lat_displacements)

@@ -34,6 +34,7 @@ import numpy as np
 import requests
 import urllib3
 from huggingface_hub import HfApi, get_token
+from huggingface_hub.hf_api import RepoFile
 
 REPO_ID = "KIT-MRT/KITScenes-Multimodal"
 # Revision the AutoE2E kitscenes-val v3.5 mirror was built from.
@@ -96,6 +97,7 @@ class ResumableHashingReader:
 
     def read(self, size: int = -1) -> bytes:
         while True:
+            assert self._response is not None  # set by _open()
             try:
                 data = self._response.raw.read(size)
             except CONNECTION_ERRORS as exc:
@@ -159,7 +161,7 @@ def process_scene(scene_id: str, expected: dict, args: argparse.Namespace, token
 
     reader = ResumableHashingReader(url, token, expected["size"], scene_id[:8])
     try:
-        with cf.ThreadPoolExecutor(args.workers) as pool, tarfile.open(fileobj=reader, mode="r|") as tar:
+        with cf.ThreadPoolExecutor(args.workers) as pool, tarfile.open(fileobj=reader, mode="r|") as tar:  # type: ignore[call-overload]  # stream mode only reads
             for member in tar:
                 parts = Path(member.name).parts
                 if not parts or parts[0] != scene_id:
@@ -228,7 +230,9 @@ def published_tars(split: str, revision: str) -> dict[str, dict]:
     """Map scene id -> {sha256, size} for every tar in data/<split>/ at this revision."""
     tars = {}
     for entry in HfApi().list_repo_tree(REPO_ID, repo_type="dataset", path_in_repo=f"data/{split}", revision=revision):
-        if entry.path.endswith(".tar"):
+        if isinstance(entry, RepoFile) and entry.path.endswith(".tar"):
+            if entry.lfs is None:
+                raise ValueError(f"{entry.path} has no LFS checksum")
             scene_id = Path(entry.path).stem
             tars[scene_id] = {"sha256": entry.lfs.sha256, "size": entry.lfs.size}
     return tars

@@ -11,8 +11,7 @@ which are linearly interpolated to 10 Hz; the scores use the top-confidence path
 
 ## Setup
 
-Tested on Ubuntu 26.04 with Python 3.12 and an RTX 4050 Laptop GPU (6 GB), at about
-0.7 s per frame. Accept the [KITScenes access terms](https://huggingface.co/datasets/KIT-MRT/KITScenes-Multimodal),
+Accept the [KITScenes access terms](https://huggingface.co/datasets/KIT-MRT/KITScenes-Multimodal),
 then run from the repository root:
 
 ```bash

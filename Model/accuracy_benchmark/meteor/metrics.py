@@ -1,7 +1,7 @@
 """Metrics calculation for METEOR benchmark on KITScenes val."""
 from __future__ import annotations
 
-from typing import Dict, Any, Tuple
+from typing import Any
 import numpy as np
 
 
